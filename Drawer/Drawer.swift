@@ -52,7 +52,11 @@ func largestWindow(of app: NSRunningApplication) -> CGRect? {
 
 /// Bring an app and its window to the front. `NSRunningApplication.activate()` from a background
 /// app is often ignored on macOS 14+, so set the app frontmost through Accessibility instead.
+/// When Drawer last brought an app forward itself, so it can tell those activations from the user's.
+var lastOwnActivation: CFTimeInterval = 0
+
 func bringToFront(_ app: NSRunningApplication, _ window: AXUIElement?) {
+    lastOwnActivation = CACurrentMediaTime()
     let el = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetAttributeValue(el, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
     if let window {
@@ -396,13 +400,25 @@ final class Drawer {
         return pair.id
     }
 
+    init() {
+        // Clicking (or switching to) the main app dismisses its floating drawers, which it would cover anyway.
+        // Tiled drawers sit beside the main window, so they stay.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
+                  let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
+                  let st = self.stages[id] else { return }
+            for s in st.sessions where s.docked && !s.pair.shrinkMain { self.close(s.pair.id, raise: false) }
+        }
+    }
+
     // MARK: Opening
 
     /// Launch the drawer app if needed, wait for its window, then slide it in.
     func show(_ pair: Pair) {
         pending[pair.id]?.invalidate()
         let started = CACurrentMediaTime()
-        var reopened = false, hidOnce = false
+        var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?
         var spaceMove: (window: AXUIElement, at: CFTimeInterval, restored: Bool)?
 
@@ -410,6 +426,7 @@ final class Drawer {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pair.drawerID) else { return }
             let conf = NSWorkspace.OpenConfiguration()
             conf.activates = false
+            conf.hides = true   // its first window must not flash where it was last time
             NSWorkspace.shared.openApplication(at: url, configuration: conf)
         }
 
@@ -418,18 +435,29 @@ final class Drawer {
             let elapsed = CACurrentMediaTime() - started
             if elapsed > 10 { t.invalidate(); self.pending[pair.id] = nil; return }   // app never produced a window
             guard let app = running(pair.drawerID), app.isFinishedLaunching else { return }
-            // A visible window (popped out, or reopened where it last was) would jump to the drawer spot.
-            // Hide it first; it's parked off-screen while hidden and then slides in cleanly.
-            if !app.isHidden, !hidOnce {
-                hidOnce = true
-                if axWindow(app) != nil { app.hide(); return }
-            }
-            if app.isHidden {
-                if let w = axWindow(app) { self.park(pair, w) }
-                hidOnce = true
+            // A window wherever it last was (popped out, moved, or reopened) would flash there before jumping
+            // to the drawer spot. So the app stays hidden until its window is parked off-screen, then unhides.
+            if !parked {
+                guard let w = axWindow(app) else {
+                    // Running but no window (common after closing it, and for Transmit/TablePlus):
+                    // a "reopen" asks for its default window, hidden so it can't flash.
+                    if !app.isHidden { app.hide() }
+                    if !reopened, elapsed > 0.3, let url = app.bundleURL {
+                        reopened = true
+                        let conf = NSWorkspace.OpenConfiguration()
+                        conf.activates = false
+                        conf.hides = true
+                        NSWorkspace.shared.openApplication(at: url, configuration: conf)
+                    }
+                    return
+                }
+                if !app.isHidden { app.hide(); return }
+                self.park(pair, w)
+                parked = true
                 app.unhide()
                 return
             }
+            if app.isHidden { app.unhide(); return }
             // Moving the window here from another desktop (see below): wait for it to land.
             if let m = spaceMove {
                 let now = CACurrentMediaTime()
@@ -451,16 +479,7 @@ final class Drawer {
                 self.present(pair, app: app, window: m.window)
                 return
             }
-            guard let w = axWindow(app) else {
-                // Running but no window (common for Transmit/TablePlus): a "reopen" asks for its default window.
-                if !reopened, elapsed > 0.6, let url = app.bundleURL {
-                    reopened = true
-                    let conf = NSWorkspace.OpenConfiguration()
-                    conf.activates = false
-                    NSWorkspace.shared.openApplication(at: url, configuration: conf)
-                }
-                return
-            }
+            guard let w = axWindow(app) else { return }
             // The window is on another desktop. There's no public API to move it, but a window restored from
             // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
             if !onCurrentSpace(app) {
@@ -558,7 +577,7 @@ final class Drawer {
     // MARK: Closing
 
     /// Slide the drawer back off its screen edge while its neighbours grow back into the space.
-    func close(_ id: UUID) {
+    func close(_ id: UUID, raise: Bool = true) {
         if let t = pending.removeValue(forKey: id) { t.invalidate(); return }
         guard let (st, s) = session(id) else { return }
         let before = st.layout()
@@ -572,7 +591,7 @@ final class Drawer {
         let others = st.sessions
         let wasFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
-        if let app { bringToFront(app, s.window) }   // must be in front, or neighbours would cover it as they grow
+        if raise, let app { bringToFront(app, s.window) }   // must be in front, or neighbours would cover it as they grow
         st.quietUntil = .infinity
         st.animator.run(duration: 0.24, curve: easeInCubic, step: { e in
             let d = lerp(f, parked, e)

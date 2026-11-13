@@ -328,7 +328,8 @@ final class DrawerSession {
     }
 }
 
-/// Calls back as soon as an app creates a window (an Accessibility notification, so no polling delay).
+/// Calls back as soon as an app creates a window or shows one again (Accessibility notifications, so no
+/// polling delay).
 final class WindowCreationWatcher {
     private var observer: AXObserver?
     private let app: AXUIElement
@@ -343,13 +344,18 @@ final class WindowCreationWatcher {
         }, &obs) == .success, let obs else { return nil }
         guard AXObserverAddNotification(obs, app, kAXWindowCreatedNotification as CFString,
                                         Unmanaged.passUnretained(self).toOpaque()) == .success else { return nil }
+        // A hidden window shown again isn't "created", but it becomes the main/focused window.
+        for n in Self.reshown { AXObserverAddNotification(obs, app, n as CFString, Unmanaged.passUnretained(self).toOpaque()) }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         observer = obs
     }
 
+    private static let reshown = [kAXMainWindowChangedNotification, kAXFocusedWindowChangedNotification]
+
     deinit {
         guard let observer else { return }
         AXObserverRemoveNotification(observer, app, kAXWindowCreatedNotification as CFString)
+        for n in Self.reshown { AXObserverRemoveNotification(observer, app, n as CFString) }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
     }
 }
@@ -413,6 +419,9 @@ final class Drawer {
         didSet { for id in creationWatchers.keys where pending[id] == nil { creationWatchers[id] = nil } }
     }
     private var creationWatchers: [UUID: WindowCreationWatcher] = [:]
+    /// The window each drawer app last showed in a drawer. Many apps (Rex, Electron apps) only hide a window
+    /// when it's closed and show the same one again on reopen, so it can be parked before it reappears.
+    private var lastWindows: [String: AXUIElement] = [:]
 
     var lockedFrames: [CGRect] { stages.values.flatMap { $0.sessions.filter(\.docked).map(\.expected) } }
     var openAppIDs: Set<String> { Set(stages.values.flatMap { st in st.sessions.map(\.pair.drawerID) + [st.mainID] }) }
@@ -491,6 +500,8 @@ final class Drawer {
                     if !app.isHidden { app.hide() }
                     if !reopened, elapsed > 0.3, let url = app.bundleURL {
                         reopened = true
+                        // If it re-shows the window it hid on close, that one is already off-screen.
+                        if let last = self.lastWindows[pair.drawerID] { self.park(pair, last) }
                         let conf = NSWorkspace.OpenConfiguration()
                         conf.activates = false
                         conf.hides = true
@@ -572,6 +583,7 @@ final class Drawer {
     private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement) {
         let st = stage(for: pair.mainID)
         let before = st.layout()
+        lastWindows[pair.drawerID] = w
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
         let after = st.layout()
@@ -599,7 +611,7 @@ final class Drawer {
                     o.resizer.request(o.window, track(old: a, new: b, edge: pair.edge, drawer: d, lead: lead))
                 } }
             }
-        }) { [weak self] in
+        }) { [weak self, st, s] in
             st.setMain(after.main)
             for o in others { if let b = after.drawers[o.pair.id] { o.expected = b; o.resizer.request(o.window, b) } }
             bringToFront(app, w)   // in case another app grabbed focus mid-slide

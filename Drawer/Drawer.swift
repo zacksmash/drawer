@@ -323,7 +323,11 @@ final class DrawerSession {
     }
 
     private func moved() {
-        guard docked, let now = axFrame(window) else { return }
+        // Only the user dragging the drawer itself pops it out: its app is in front and the mouse is down.
+        // When we move it (following the main window) it can lag behind; that must never count.
+        guard docked, NSEvent.pressedMouseButtons & 1 != 0,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == pair.drawerID,
+              let now = axFrame(window) else { return }
         if abs(now.minX - expected.minX) + abs(now.minY - expected.minY) > 24 { onPopOut?() }
     }
 }
@@ -371,6 +375,7 @@ final class Stage {
     var expectedMain: CGRect?        // main frame we last set; anything else means the user moved/re-tiled it
     var quietUntil: CFTimeInterval = 0
     var relayoutTimer: Timer?
+    var settleTimer: Timer?
     private var observer: AXObserver?
     var onMainChanged: (() -> Void)?
 
@@ -758,6 +763,16 @@ final class Drawer {
                                                   : CGPoint(x: s.parked.x, y: s.expected.minY)
             }
             if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
+            // Once the drag stops, make sure every drawer landed exactly in place (slow apps can drop moves).
+            st.settleTimer?.invalidate()
+            let t = Timer(timeInterval: 0.2, repeats: false) { [weak st] _ in
+                guard let st else { return }
+                for s in st.sessions where s.docked {
+                    if let f = axFrame(s.window), f.origin != s.expected.origin { setPos(s.window, s.expected.origin) }
+                }
+            }
+            RunLoop.main.add(t, forMode: .common)
+            st.settleTimer = t
         } else {
             st.relayoutTimer?.invalidate()
             let t = Timer(timeInterval: 0.15, repeats: false) { [weak self, weak st] _ in if let st { self?.relayout(st) } }

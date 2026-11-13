@@ -37,13 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         let cfg = Config.shared
         for p in cfg.pairs {
-            let i = menu.addItem(withTitle: "\(appName(p.mainID))  →  \(appName(p.drawerID))  ·  \(p.edge.label)",
+            let i = menu.addItem(withTitle: "\(appName(p.mainID))  →  \(appName(p.drawerID))  ·  \(p.edge.label)  ·  \(p.effectiveShortcut.display)",
                                  action: nil, keyEquivalent: "")
             i.image = appIcon(p.drawerID)
             i.isEnabled = false
         }
-        let hint = menu.addItem(withTitle: "Shortcut: \(cfg.shortcut.display)", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())

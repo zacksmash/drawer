@@ -506,6 +506,7 @@ final class Drawer {
         guard let f = axFrame(s.window) else { app?.hide(); finishStage(st, after); return }
         let parked = CGRect(origin: s.parked, size: f.size)
         let others = st.sessions
+        let wasFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
         if let app { bringToFront(app, s.window) }   // must be in front, or neighbours would cover it as they grow
         st.quietUntil = .infinity
@@ -523,8 +524,21 @@ final class Drawer {
         }) { [weak self] in
             app?.hide()
             self?.finishStage(st, after)
-            if let main = running(st.mainID) { bringToFront(main, st.mainWindow) }
+            Drawer.restoreFocus(st, wasFront: wasFront, closing: s.pair.drawerID)
         }
+    }
+
+    /// After a drawer closes, put the main window and the drawers still open back in a sensible order.
+    /// Floating drawers sit on top of the main window, so they must end up above it again.
+    private static func restoreFocus(_ st: Stage, wasFront: String?, closing: String) {
+        if let main = running(st.mainID) { bringToFront(main, st.mainWindow) }
+        if wasFront == st.mainID { return }   // the user was working in the main app: leave them there
+        // The user was in a drawer: raise the floating ones over the main window, ending on the one they were in.
+        let floating = st.sessions.filter { !$0.pair.shrinkMain }
+        let ordered = floating.filter { $0.pair.drawerID != wasFront } + floating.filter { $0.pair.drawerID == wasFront }
+        for o in ordered { if let a = running(o.pair.drawerID) { bringToFront(a, o.window) } }
+        if let o = st.sessions.first(where: { $0.pair.drawerID == wasFront && $0.pair.shrinkMain }),
+           let a = running(o.pair.drawerID) { bringToFront(a, o.window) }
     }
 
     /// Settle a stage on `layout`, and forget it if no drawers are left.

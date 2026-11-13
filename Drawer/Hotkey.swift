@@ -14,7 +14,7 @@ final class Hotkey {
         var front: String?
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
-        var shortcuts: [Shortcut] = [.default]
+        var shortcuts: [Shortcut] = []
         var peek = true
     }
 

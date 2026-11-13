@@ -16,17 +16,26 @@ struct Pair: Codable, Identifiable, Equatable {
     var edge: Edge = .bottom
     var size: Double = 0.5          // share of the main window's height (bottom) or width (left/right)
     var shrinkMain: Bool = false    // tile next to the main window instead of overlaying it
-    var shortcut: Shortcut?         // nil = use the default shortcut
+    var shortcut: Shortcut?         // nil = use the edge's shortcut
 
-    var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut }
+    var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut(for: edge) }
 }
 
 struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
 
-    static let `default` = Shortcut(keyCode: kVK_ANSI_D,
-                                    flags: CGEventFlags([.maskControl, .maskSecondaryFn]).rawValue)
+    /// fn⌃ + key: S (left), D (bottom), G (right) sit under the left hand in a row.
+    static func fnControl(_ key: Int) -> Shortcut {
+        Shortcut(keyCode: key, flags: CGEventFlags([.maskControl, .maskSecondaryFn]).rawValue)
+    }
+    static func `default`(for edge: Edge) -> Shortcut {
+        switch edge {
+        case .left: return fnControl(kVK_ANSI_S)
+        case .bottom: return fnControl(kVK_ANSI_D)
+        case .right: return fnControl(kVK_ANSI_G)
+        }
+    }
     static let modifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand, .maskSecondaryFn]
 
     var cgFlags: CGEventFlags { CGEventFlags(rawValue: flags) }
@@ -68,7 +77,7 @@ final class Config: ObservableObject {
     private let d = UserDefaults.standard
 
     @Published var pairs: [Pair] { didSet { store(pairs, "pairs") } }
-    @Published var shortcut: Shortcut { didSet { store(shortcut, "shortcut") } }
+    @Published var edgeShortcuts: [String: Shortcut] { didSet { store(edgeShortcuts, "edgeShortcuts") } }
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
 
@@ -82,7 +91,11 @@ final class Config: ObservableObject {
                                        drawerID: d.string(forKey: "drawerBundleID") ?? "com.superlogical.rex",
                                        size: d.object(forKey: "heightFraction") as? Double ?? 0.5,
                                        shrinkMain: d.bool(forKey: "shrinkMain"))]
-        shortcut = load("shortcut") ?? .default
+        var edges: [String: Shortcut] = load("edgeShortcuts") ?? [:]
+        if edges.isEmpty, let old: Shortcut = load("shortcut"), old != .default(for: .bottom) {
+            edges[Edge.bottom.rawValue] = old   // keep a custom single shortcut from earlier versions on the bottom slot
+        }
+        edgeShortcuts = edges
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
     }
@@ -96,8 +109,15 @@ final class Config: ObservableObject {
         pairs.filter { $0.mainID == main && $0.effectiveShortcut == shortcut }
     }
 
+    /// The shortcut each edge's drawers open with unless they override it.
+    func shortcut(for edge: Edge) -> Shortcut { edgeShortcuts[edge.rawValue] ?? .default(for: edge) }
+
+    func setShortcut(_ s: Shortcut, for edge: Edge) {
+        edgeShortcuts[edge.rawValue] = s == .default(for: edge) ? nil : s
+    }
+
     /// Every distinct shortcut in use.
-    var allShortcuts: [Shortcut] { Array(Set(pairs.map(\.effectiveShortcut) + [shortcut]).map { $0 }) }
+    var allShortcuts: [Shortcut] { Array(Set(pairs.map(\.effectiveShortcut))) }
 }
 
 /// Gap macOS puts between tiled windows (System Settings → Desktop & Dock → "Tiled windows have margins").

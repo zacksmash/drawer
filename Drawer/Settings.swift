@@ -73,11 +73,13 @@ struct DrawersTab: View {
                         AppIcon(id: main, size: 18)
                         Text(appName(main))
                         Spacer()
-                        Button { isNew = true; editing = Pair(mainID: main, drawerID: "", edge: freeEdge(for: main)) } label: {
-                            Image(systemName: "plus")
+                        if let edge = freeEdge(for: main) {
+                            Button { isNew = true; editing = Pair(mainID: main, drawerID: "", edge: edge) } label: {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Add another drawer to \(appName(main))")
                         }
-                        .buttonStyle(.borderless)
-                        .help("Add another drawer to \(appName(main))")
                     }
                 }
             }
@@ -106,9 +108,9 @@ struct DrawersTab: View {
         }
     }
 
-    private func freeEdge(for main: String) -> Edge {
+    private func freeEdge(for main: String) -> Edge? {
         let used = Set(cfg.pairs.filter { $0.mainID == main }.map(\.edge))
-        return Edge.allCases.first { !used.contains($0) } ?? .bottom
+        return Edge.allCases.first { !used.contains($0) }
     }
 
     /// Why this drawer clashes with another one on the same main app, if it does.
@@ -177,8 +179,8 @@ struct DrawerEditor: View {
                         .foregroundStyle(.secondary)
                 }
                 Section {
-                    Picker("Slides in from", selection: $draft.edge) {
-                        ForEach(Edge.allCases) { Text($0.label).tag($0) }
+                    LabeledContent("Slides in from") {
+                        EdgePicker(edge: $draft.edge, taken: takenEdges)
                     }
                     Picker("Size", selection: Binding(
                         get: { Pair.sizes.min { abs($0.value - draft.size) < abs($1.value - draft.size) }!.value },
@@ -189,18 +191,30 @@ struct DrawerEditor: View {
                         Text("Make room for the drawer")
                         Text("Resizes the main window so the two sit side by side like tiled windows. When off, the drawer floats over it.")
                     }
+                } footer: {
+                    if takenEdges.count == Edge.allCases.count {
+                        Label("\(appName(draft.mainID)) already has a drawer on every edge.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                 }
                 Section {
-                    Toggle("Use the default shortcut", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { draft.shortcut == nil },
-                        set: { draft.shortcut = $0 ? nil : Config.shared.shortcut }))
+                        set: { draft.shortcut = $0 ? nil : Config.shared.shortcut(for: draft.edge) })) {
+                        HStack(spacing: 6) {
+                            Text("Use the \(draft.edge.label.lowercased()) edge shortcut")
+                            HStack(spacing: 3) {
+                                ForEach(Config.shared.shortcut(for: draft.edge).keys, id: \.self) { KeyCap(text: $0) }
+                            }
+                        }
+                    }
                     if let sc = draft.shortcut {
                         LabeledContent("Shortcut") {
-                            ShortcutRecorder(shortcut: Binding(get: { sc }, set: { draft.shortcut = $0 }), showsReset: false)
+                            ShortcutRecorder(shortcut: Binding(get: { sc }, set: { draft.shortcut = $0 }))
                         }
                     }
                 } footer: {
-                    Text("Give each drawer on the same main app its own shortcut, like one per edge.")
+                    Text("Each edge has its own shortcut, set in General.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -216,11 +230,56 @@ struct DrawerEditor: View {
                 Button("Cancel") { onFinish(.cancel) }.keyboardShortcut(.cancelAction)
                 Button(isNew ? "Add" : "Done") { onFinish(.save(draft)) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(draft.mainID.isEmpty || draft.drawerID.isEmpty || draft.mainID == draft.drawerID)
+                    .disabled(draft.mainID.isEmpty || draft.drawerID.isEmpty || draft.mainID == draft.drawerID
+                              || takenEdges.contains(draft.edge))
             }
             .padding(16)
         }
         .frame(width: 480, height: 680)
+        .onChange(of: draft.mainID) { _, _ in
+            // Moved to a main app where this edge is taken: pick a free one.
+            if takenEdges.contains(draft.edge), let free = Edge.allCases.first(where: { !takenEdges.contains($0) }) {
+                draft.edge = free
+            }
+        }
+    }
+
+    /// Edges other drawers on the same main app already use.
+    private var takenEdges: Set<Edge> {
+        Set(Config.shared.pairs.filter { $0.mainID == draft.mainID && $0.id != draft.id }.map(\.edge))
+    }
+}
+
+/// Segmented edge control with taken edges greyed out (SwiftUI's segmented Picker can't disable one segment).
+struct EdgePicker: NSViewRepresentable {
+    @Binding var edge: Edge
+    let taken: Set<Edge>
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let c = NSSegmentedControl(labels: Edge.allCases.map(\.label), trackingMode: .selectOne,
+                                   target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        c.segmentDistribution = .fillEqually
+        return c
+    }
+
+    func updateNSView(_ c: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        for (i, e) in Edge.allCases.enumerated() {
+            c.setEnabled(!taken.contains(e), forSegment: i)
+            c.setToolTip(taken.contains(e) ? "Another drawer on this app uses the \(e.label.lowercased()) edge" : nil, forSegment: i)
+        }
+        c.selectedSegment = Edge.allCases.firstIndex(of: edge) ?? 0
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject {
+        var parent: EdgePicker
+        init(parent: EdgePicker) { self.parent = parent }
+        @objc func changed(_ c: NSSegmentedControl) {
+            guard Edge.allCases.indices.contains(c.selectedSegment) else { return }
+            parent.edge = Edge.allCases[c.selectedSegment]
+        }
     }
 }
 
@@ -353,7 +412,12 @@ struct GeneralTab: View {
     var body: some View {
         Form {
             Section("Keyboard") {
-                LabeledContent("Default shortcut") { ShortcutRecorder(shortcut: $cfg.shortcut) }
+                ForEach([Edge.left, .bottom, .right]) { e in
+                    LabeledContent("\(e.label) drawers") {
+                        ShortcutRecorder(shortcut: Binding(get: { cfg.shortcut(for: e) }, set: { cfg.setShortcut($0, for: e) }),
+                                         resetTo: .default(for: e))
+                    }
+                }
                 Toggle(isOn: $cfg.peek) {
                     Text("Hold to peek")
                     Text("Hold the shortcut to show the drawer, and release to hide it.")
@@ -394,7 +458,7 @@ struct GeneralTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 430)
+        .frame(width: 520, height: 500)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             launchAtLogin = SMAppService.mainApp.status == .enabled   // pick up changes made in System Settings
             axTrusted = AXIsProcessTrusted()
@@ -405,7 +469,7 @@ struct GeneralTab: View {
 /// Shows the shortcut as key caps; click, then press the new shortcut (needs ⌃, ⌥ or ⌘; fn optional). Esc cancels.
 struct ShortcutRecorder: View {
     @Binding var shortcut: Shortcut
-    var showsReset = true
+    var resetTo: Shortcut? = nil
     @State private var recording = false
     @State private var monitor: Any?
 
@@ -429,10 +493,10 @@ struct ShortcutRecorder: View {
             .buttonStyle(.plain)
             .help("Click to record a new shortcut")
 
-            if showsReset && shortcut != .default && !recording {
-                Button { shortcut = .default } label: { Image(systemName: "arrow.counterclockwise") }
+            if let resetTo, shortcut != resetTo, !recording {
+                Button { shortcut = resetTo } label: { Image(systemName: "arrow.counterclockwise") }
                     .buttonStyle(.borderless)
-                    .help("Reset to \(Shortcut.default.display)")
+                    .help("Reset to \(resetTo.display)")
             }
         }
     }

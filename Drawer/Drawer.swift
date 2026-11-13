@@ -66,6 +66,13 @@ func bringToFront(_ app: NSRunningApplication, _ window: AXUIElement?) {
     app.activate()
 }
 
+/// A normal document/app window (not a panel, popover or helper window).
+func isStandardWindow(_ w: AXUIElement) -> Bool {
+    var v: CFTypeRef?
+    return AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &v) == .success
+        && (v as? String) == kAXStandardWindowSubrole as String
+}
+
 func isMinimized(_ w: AXUIElement) -> Bool {
     var v: CFTypeRef?
     return AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &v) == .success && (v as? Bool) == true
@@ -321,6 +328,32 @@ final class DrawerSession {
     }
 }
 
+/// Calls back as soon as an app creates a window (an Accessibility notification, so no polling delay).
+final class WindowCreationWatcher {
+    private var observer: AXObserver?
+    private let app: AXUIElement
+    private let onCreate: (AXUIElement) -> Void
+
+    init?(pid: pid_t, onCreate: @escaping (AXUIElement) -> Void) {
+        self.app = AXUIElementCreateApplication(pid)
+        self.onCreate = onCreate
+        var obs: AXObserver?
+        guard AXObserverCreate(pid, { _, element, _, refcon in
+            Unmanaged<WindowCreationWatcher>.fromOpaque(refcon!).takeUnretainedValue().onCreate(element)
+        }, &obs) == .success, let obs else { return nil }
+        guard AXObserverAddNotification(obs, app, kAXWindowCreatedNotification as CFString,
+                                        Unmanaged.passUnretained(self).toOpaque()) == .success else { return nil }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
+        observer = obs
+    }
+
+    deinit {
+        guard let observer else { return }
+        AXObserverRemoveNotification(observer, app, kAXWindowCreatedNotification as CFString)
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+}
+
 /// A main window and the drawers currently open around it.
 final class Stage {
     let mainID: String
@@ -375,7 +408,11 @@ final class Stage {
 final class Drawer {
     /// Open drawers, grouped by main app.
     private var stages: [String: Stage] = [:]
-    private var pending: [UUID: Timer] = [:]   // drawers waiting for their app/window
+    /// Drawers waiting for their app's window, by pair. Dropping one also drops its window-creation watcher.
+    private var pending: [UUID: Timer] = [:] {
+        didSet { for id in creationWatchers.keys where pending[id] == nil { creationWatchers[id] = nil } }
+    }
+    private var creationWatchers: [UUID: WindowCreationWatcher] = [:]
 
     var lockedFrames: [CGRect] { stages.values.flatMap { $0.sessions.filter(\.docked).map(\.expected) } }
     var openAppIDs: Set<String> { Set(stages.values.flatMap { st in st.sessions.map(\.pair.drawerID) + [st.mainID] }) }
@@ -434,7 +471,17 @@ final class Drawer {
             guard let self else { t.invalidate(); return }
             let elapsed = CACurrentMediaTime() - started
             if elapsed > 10 { t.invalidate(); self.pending[pair.id] = nil; return }   // app never produced a window
-            guard let app = running(pair.drawerID), app.isFinishedLaunching else { return }
+            guard let app = running(pair.drawerID) else { return }
+            // Catch the window the instant the app creates it (launch or reopen) and park it off-screen,
+            // so it can't show up where it last was, even for a frame.
+            if self.creationWatchers[pair.id] == nil {
+                self.creationWatchers[pair.id] = WindowCreationWatcher(pid: app.processIdentifier) { [weak self] w in
+                    guard let self, !parked, self.pending[pair.id] != nil, isStandardWindow(w) else { return }
+                    self.park(pair, w)
+                    parked = true
+                }
+            }
+            guard app.isFinishedLaunching else { return }
             // A window wherever it last was (popped out, moved, or reopened) would flash there before jumping
             // to the drawer spot. So the app stays hidden until its window is parked off-screen, then unhides.
             if !parked {

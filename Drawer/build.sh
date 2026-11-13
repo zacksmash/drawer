@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds build/Drawer.app. Pass --install to copy it to /Applications and relaunch it.
+# Builds build/Drawer.app. Pass --install to also quit Drawer and copy it to /Applications (it does not relaunch it).
 set -e
 cd "$(dirname "$0")"
 APP=build/Drawer.app
@@ -40,6 +40,5 @@ if [[ "$1" == "--install" ]]; then
   pkill -x Drawer || true
   rm -rf /Applications/Drawer.app
   cp -R "$APP" /Applications/
-  open /Applications/Drawer.app
-  echo "Installed and launched /Applications/Drawer.app"
+  echo "Installed /Applications/Drawer.app (not launched)"
 fi

@@ -294,9 +294,12 @@ final class DrawerSession {
     let pair: Pair
     let window: AXUIElement
     var parked: CGPoint = .zero      // where macOS actually let the drawer sit off-screen (it pins windows at the edge)
-    var docked = false               // fully open; edge drags are blocked and moving it pops it out
+    var docked = false               // fully open; edge drags are blocked, and dragging it pops it out (tiled)
+                                     // or springs it back into place (floating)
     let resizer = AsyncResizer()
     private var observer: AXObserver?
+    private var releaseWatch: Timer?
+    private let spring = Animator()
     var onPopOut: (() -> Void)?
     var expected: CGRect = .zero     // frame we last put it at
 
@@ -315,6 +318,9 @@ final class DrawerSession {
     }
 
     func stopWatching() {
+        releaseWatch?.invalidate()
+        releaseWatch = nil
+        spring.stop()
         if let observer {
             AXObserverRemoveNotification(observer, window, kAXMovedNotification as CFString)
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
@@ -328,7 +334,28 @@ final class DrawerSession {
         guard docked, NSEvent.pressedMouseButtons & 1 != 0,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier == pair.drawerID,
               let now = axFrame(window) else { return }
-        if abs(now.minX - expected.minX) + abs(now.minY - expected.minY) > 24 { onPopOut?() }
+        if pair.shrinkMain {
+            if abs(now.minX - expected.minX) + abs(now.minY - expected.minY) > 24 { onPopOut?() }
+        } else {
+            springBackOnRelease()
+        }
+    }
+
+    /// A floating drawer belongs inside its main window: when the user lets go of it, glide it back.
+    private func springBackOnRelease() {
+        guard releaseWatch == nil else { return }
+        spring.stop()
+        let t = Timer(timeInterval: 0.03, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }   // still dragging
+            t.invalidate()
+            self.releaseWatch = nil
+            guard self.docked, let from = axFrame(self.window), from.origin != self.expected.origin else { return }
+            let w = self.window, to = CGRect(origin: self.expected.origin, size: from.size)
+            self.spring.run(duration: 0.25, curve: easeOutCubic, step: { e in setPos(w, lerp(from, to, e).origin) }, done: {})
+        }
+        RunLoop.main.add(t, forMode: .common)
+        releaseWatch = t
     }
 }
 

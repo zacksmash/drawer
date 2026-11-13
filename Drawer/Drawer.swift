@@ -111,6 +111,18 @@ struct StageLayout {
 /// anchored to its edge instead of hanging off the main window.
 var minSizes: [String: CGSize] = [:]
 
+/// Ask `w` for `asked` a few times over ~0.1s; if the app keeps refusing to go that small, record its
+/// minimum size. Asking more than once rules out an app that's just slow to resize. Returns true if it learned something.
+func probeMinSize(_ app: String, window w: AXUIElement, asked: CGSize) -> Bool {
+    for _ in 0..<3 {
+        guard let got = axFrame(w)?.size else { return false }
+        if got.width <= asked.width + 1 && got.height <= asked.height + 1 { return false }
+        Thread.sleep(forTimeInterval: 0.03)
+        setSize(w, asked)
+    }
+    return learnMinSize(app, window: w, asked: asked)
+}
+
 /// Record `app`'s minimum size if `w` refused to shrink to `asked`. Returns true if it learned something new.
 @discardableResult
 func learnMinSize(_ app: String, window w: AXUIElement, asked: CGSize) -> Bool {
@@ -232,6 +244,28 @@ final class AsyncResizer {
             setFrame(job.0, job.1)
         }
     }
+}
+
+/// Calls `tick` every screen refresh until it returns false.
+final class Ticker: NSObject {
+    private var link: CADisplayLink?
+    private var tick: () -> Bool
+
+    init(_ tick: @escaping () -> Bool) {
+        self.tick = tick
+        super.init()
+        let l = (NSScreen.main ?? NSScreen.screens[0]).displayLink(target: self, selector: #selector(step))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    @objc private func step() {
+        if !tick() { stop() }
+    }
+
+    func stop() { link?.invalidate(); link = nil; tick = { false } }
+
+    deinit { link?.invalidate() }
 }
 
 /// Runs one animation at a time, stepped by the display's refresh (vsync) rather than a timer,
@@ -429,7 +463,7 @@ final class Stage {
     var expectedMain: CGRect?        // main frame we last set; anything else means the user moved/re-tiled it
     var quietUntil: CFTimeInterval = 0
     var relayoutTimer: Timer?
-    var settleTimer: Timer?
+    var follower: Ticker?
     private var observer: AXObserver?
     var onMainChanged: (() -> Void)?
 
@@ -665,10 +699,15 @@ final class Drawer {
         lastWindows[pair.drawerID] = w
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
+        guard let guess = st.layout().drawers[pair.id] else { return }
+        setFrame(w, closedFrame(guess, edge: pair.edge))
+        // If the app won't go that small (Rex has a minimum height), find out now, before sliding,
+        // so it doesn't stop short and then jump once the size is noticed.
+        if probeMinSize(pair.drawerID, window: w, asked: guess.size) {
+            setFrame(w, closedFrame(st.layout().drawers[pair.id] ?? guess, edge: pair.edge))
+        }
         let after = st.layout()
         guard let open = after.drawers[pair.id] else { return }
-
-        setFrame(w, closedFrame(open, edge: pair.edge))
         let start = CGRect(origin: axFrame(w)?.origin ?? closedFrame(open, edge: pair.edge).origin, size: open.size)
         s.parked = start.origin
         s.expected = open
@@ -831,31 +870,52 @@ final class Drawer {
            near(now.width, expected.width), near(now.height, expected.height) { return }   // our own change
 
         if near(now.width, expected.width), near(now.height, expected.height) {
-            let (dx, dy) = (now.minX - expected.minX, now.minY - expected.minY)
-            st.expectedMain = now
-            st.area = st.area.offsetBy(dx: dx, dy: dy)
-            for s in st.sessions {
-                s.expected = s.expected.offsetBy(dx: dx, dy: dy)   // update first, so it isn't seen as a pop-out
-                setPos(s.window, s.expected.origin)
-                s.parked = s.pair.edge == .bottom ? CGPoint(x: s.expected.minX, y: s.parked.y)
-                                                  : CGPoint(x: s.parked.x, y: s.expected.minY)
-            }
-            if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
-            // Once the drag stops, make sure every drawer landed exactly in place (slow apps can drop moves).
-            st.settleTimer?.invalidate()
-            let t = Timer(timeInterval: 0.2, repeats: false) { [weak st] _ in
-                guard let st else { return }
-                for s in st.sessions where s.docked {
-                    if let f = axFrame(s.window), f.origin != s.expected.origin { setPos(s.window, s.expected.origin) }
-                }
-            }
-            RunLoop.main.add(t, forMode: .common)
-            st.settleTimer = t
+            shift(st, to: now)
+            follow(st)
         } else {
             st.relayoutTimer?.invalidate()
             let t = Timer(timeInterval: 0.15, repeats: false) { [weak self, weak st] _ in if let st { self?.relayout(st) } }
             RunLoop.main.add(t, forMode: .common)
             st.relayoutTimer = t
+        }
+    }
+
+    /// The main window moved (same size): move every drawer by the same amount. Drawers are moved on
+    /// background queues (latest position wins) so a slow app can't hold up the others.
+    private func shift(_ st: Stage, to now: CGRect) {
+        guard let expected = st.expectedMain else { return }
+        let (dx, dy) = (now.minX - expected.minX, now.minY - expected.minY)
+        guard dx != 0 || dy != 0 else { return }
+        st.expectedMain = now
+        st.area = st.area.offsetBy(dx: dx, dy: dy)
+        for s in st.sessions {
+            s.expected = s.expected.offsetBy(dx: dx, dy: dy)   // update first, so it isn't seen as a pop-out
+            s.resizer.request(s.window, s.expected)
+            s.parked = s.pair.edge == .bottom ? CGPoint(x: s.expected.minX, y: s.parked.y)
+                                              : CGPoint(x: s.parked.x, y: s.expected.minY)
+        }
+        if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
+    }
+
+    /// While the main window is being dragged, track it every screen refresh instead of waiting for
+    /// move notifications (which arrive in bursts), so the drawers stay locked to it. Once the drag ends,
+    /// make sure every drawer landed exactly in place.
+    private func follow(_ st: Stage) {
+        guard st.follower == nil else { return }
+        var still = 0
+        st.follower = Ticker { [weak self, weak st] in
+            guard let self, let st, self.stages[st.mainID] === st, !st.animator.isRunning,
+                  let mw = st.mainWindow, let now = axFrame(mw), let expected = st.expectedMain,
+                  abs(now.width - expected.width) < 2, abs(now.height - expected.height) < 2 else {
+                st?.follower = nil; return false
+            }
+            if now.origin != expected.origin { self.shift(st, to: now); still = 0 } else { still += 1 }
+            guard NSEvent.pressedMouseButtons & 1 == 0, still > 6 else { return true }
+            st.follower = nil
+            for s in st.sessions where s.docked {
+                if let f = axFrame(s.window), f.origin != s.expected.origin { s.resizer.request(s.window, s.expected) }
+            }
+            return false
         }
     }
 

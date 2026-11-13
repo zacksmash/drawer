@@ -30,7 +30,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP"
+# Sign with a stable identity when there is one, so macOS keeps the Accessibility permission across rebuilds
+# (an ad-hoc signature changes every build, which means removing and re-adding Drawer in Privacy settings).
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')
+codesign --force --sign "${IDENTITY:--}" "$APP"
 echo "Built $APP"
 
 if [[ "$1" == "--install" ]]; then

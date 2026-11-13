@@ -63,26 +63,44 @@ final class Hotkey {
 
     // MARK: Tap (own thread)
 
+    /// Creates the tap once Accessibility is allowed, and tears it down the moment it's revoked: an active
+    /// tap whose permission is pulled can leave macOS holding back all input (a frozen Mac) until it's gone.
     private func runTap() {
         let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
         let mask = types.reduce(CGEventMask(0)) { $0 | CGEventMask(1 << $1.rawValue) }
-        while tap == nil {
-            tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                    eventsOfInterest: mask, callback: { _, type, event, ctx in
+        while true {
+            while !AXIsProcessTrusted() { Thread.sleep(forTimeInterval: 1) }
+            guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                            eventsOfInterest: mask, callback: { _, type, event, ctx in
                 let me = Unmanaged<Hotkey>.fromOpaque(ctx!).takeUnretainedValue()
                 return me.handle(type, event) ? nil : Unmanaged.passUnretained(event)
-            }, userInfo: Unmanaged.passUnretained(self).toOpaque())
-            if tap == nil { Thread.sleep(forTimeInterval: 2) }   // no Accessibility permission yet
+            }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { Thread.sleep(forTimeInterval: 2); continue }
+            tap = t
+            let loop = CFRunLoopGetCurrent()
+            let src = CFMachPortCreateRunLoopSource(nil, t, 0)
+            CFRunLoopAddSource(loop, src, .commonModes)
+            // Watchdog on this same thread: drop the tap as soon as the permission goes away.
+            let watchdog = CFRunLoopTimerCreateWithHandler(nil, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0) { _ in
+                if !AXIsProcessTrusted() { CGEvent.tapEnable(tap: t, enable: false); CFRunLoopStop(loop) }
+            }
+            CFRunLoopAddTimer(loop, watchdog, .commonModes)
+            CGEvent.tapEnable(tap: t, enable: true)
+            CFRunLoopRun()   // returns only when the watchdog stops it
+            CFRunLoopTimerInvalidate(watchdog)
+            CFRunLoopRemoveSource(loop, src, .commonModes)
+            CGEvent.tapEnable(tap: t, enable: false)
+            CFMachPortInvalidate(t)
+            tap = nil
+            pressedAt = nil
+            blockingDrag = false
         }
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
-        CGEvent.tapEnable(tap: tap!, enable: true)
-        CFRunLoopRun()
     }
 
     /// Returns true to swallow the event. Must stay fast and never block.
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // Re-enable only while allowed; otherwise the watchdog is about to remove the tap.
+            if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
         let s = current()

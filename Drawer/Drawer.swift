@@ -86,6 +86,24 @@ struct StageLayout {
 /// Lay out `pairs` (the open drawers of one main app) around the main window's full frame `area`.
 /// Tiled ("make room") side drawers take full-height strips and a tiled bottom drawer spans the width
 /// left between them; the main window gets what remains. Floating drawers sit inside the main window.
+/// Smallest size each drawer app will let its window be (e.g. Rex won't go under 526pt tall), learned by
+/// asking for a size and reading back what the app kept. Layouts never go below it, so the drawer stays
+/// anchored to its edge instead of hanging off the main window.
+var minSizes: [String: CGSize] = [:]
+
+/// Record `app`'s minimum size if `w` refused to shrink to `asked`. Returns true if it learned something new.
+@discardableResult
+func learnMinSize(_ app: String, window w: AXUIElement, asked: CGSize) -> Bool {
+    guard let got = axFrame(w)?.size else { return false }
+    let old = minSizes[app] ?? .zero
+    var new = old
+    if got.width > asked.width + 1 { new.width = max(old.width, got.width) }
+    if got.height > asked.height + 1 { new.height = max(old.height, got.height) }
+    guard new != old else { return false }
+    minSizes[app] = new
+    return true
+}
+
 func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     let gap = tileGap, inset = Config.shared.inset
     var main = area
@@ -93,8 +111,9 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     let tiled = pairs.filter(\.shrinkMain), floating = pairs.filter { !$0.shrinkMain }
 
     // Tiled: sides first (full height), then bottom between them.
+    func minSize(_ p: Pair) -> CGSize { minSizes[p.drawerID] ?? .zero }
     for p in tiled where p.edge != .bottom {
-        let w = ((area.width - gap) * p.size).rounded()
+        let w = max(((area.width - gap) * p.size).rounded(), min(minSize(p).width, main.width - gap - 200))
         if p.edge == .left {
             drawers[p.id] = CGRect(x: main.minX, y: area.minY, width: w, height: area.height)
             main = CGRect(x: main.minX + w + gap, y: main.minY, width: main.width - w - gap, height: main.height)
@@ -104,7 +123,7 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
         }
     }
     for p in tiled where p.edge == .bottom {
-        let h = ((area.height - gap) * p.size).rounded()
+        let h = max(((area.height - gap) * p.size).rounded(), min(minSize(p).height, main.height - gap - 200))
         drawers[p.id] = CGRect(x: main.minX, y: main.maxY - h, width: main.width, height: h)
         main.size.height -= h + gap
     }
@@ -116,13 +135,13 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
         let r = main.insetBy(dx: inset, dy: inset)
         switch p.edge {
         case .bottom:
-            let h = ((main.height - inset) * p.size).rounded()
+            let h = min(max(((main.height - inset) * p.size).rounded(), minSize(p).height), r.height)
             drawers[p.id] = CGRect(x: r.minX, y: r.maxY - h, width: r.width, height: h)
         case .left:
-            let w = ((main.width - inset) * p.size).rounded()
+            let w = min(max(((main.width - inset) * p.size).rounded(), minSize(p).width), r.width)
             drawers[p.id] = CGRect(x: r.minX, y: r.minY, width: w, height: r.height)
         case .right:
-            let w = ((main.width - inset) * p.size).rounded()
+            let w = min(max(((main.width - inset) * p.size).rounded(), minSize(p).width), r.width)
             drawers[p.id] = CGRect(x: r.maxX - w, y: r.minY, width: w, height: r.height)
         }
     }
@@ -447,7 +466,10 @@ final class Drawer {
         let st = stages[pair.mainID]
         let area = st?.area ?? running(pair.mainID).flatMap(axWindow).flatMap(axFrame) ?? Self.screenArea()
         let pairs = (st?.sessions.map(\.pair) ?? []) + [pair]
-        if let open = stageLayout(area: area, pairs: pairs).drawers[pair.id] { setFrame(w, closedFrame(open, edge: pair.edge)) }
+        guard let open = stageLayout(area: area, pairs: pairs).drawers[pair.id] else { return }
+        setFrame(w, closedFrame(open, edge: pair.edge))
+        if learnMinSize(pair.drawerID, window: w, asked: open.size),
+           let fixed = stageLayout(area: area, pairs: pairs).drawers[pair.id] { setFrame(w, closedFrame(fixed, edge: pair.edge)) }
     }
 
     private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement) {
@@ -455,6 +477,10 @@ final class Drawer {
         let before = st.layout()
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
+        if let guess = st.layout().drawers[pair.id] {
+            setFrame(w, closedFrame(guess, edge: pair.edge))
+            learnMinSize(pair.drawerID, window: w, asked: guess.size)   // so the layout below respects it
+        }
         let after = st.layout()
         guard let open = after.drawers[pair.id] else { return }
 

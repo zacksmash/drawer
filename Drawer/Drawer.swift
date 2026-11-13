@@ -62,6 +62,15 @@ func bringToFront(_ app: NSRunningApplication, _ window: AXUIElement?) {
     app.activate()
 }
 
+func isMinimized(_ w: AXUIElement) -> Bool {
+    var v: CFTypeRef?
+    return AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &v) == .success && (v as? Bool) == true
+}
+
+func setMinimized(_ w: AXUIElement, _ on: Bool) {
+    AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, on ? kCFBooleanTrue : kCFBooleanFalse)
+}
+
 /// Whether any of the app's normal windows is on the current desktop (Space).
 func onCurrentSpace(_ app: NSRunningApplication) -> Bool {
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -395,6 +404,7 @@ final class Drawer {
         let started = CACurrentMediaTime()
         var reopened = false, hidOnce = false
         var windowSeenAt: CFTimeInterval?
+        var spaceMove: (window: AXUIElement, at: CFTimeInterval, restored: Bool)?
 
         if running(pair.drawerID) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pair.drawerID) else { return }
@@ -420,6 +430,27 @@ final class Drawer {
                 app.unhide()
                 return
             }
+            // Moving the window here from another desktop (see below): wait for it to land.
+            if let m = spaceMove {
+                let now = CACurrentMediaTime()
+                if !m.restored {
+                    // Minimised (it happened on its own desktop, out of sight): park it off-screen and restore it here.
+                    guard isMinimized(m.window) || now - m.at > 1 else { return }
+                    self.park(pair, m.window)
+                    setMinimized(m.window, false)
+                    spaceMove = (m.window, now, true)
+                    return
+                }
+                if !onCurrentSpace(app) {
+                    if now - m.at > 2 { t.invalidate(); self.pending[pair.id] = nil; self.warnOtherSpace(pair.drawerID) }
+                    return
+                }
+                t.invalidate()
+                self.pending[pair.id] = nil
+                self.park(pair, m.window)
+                self.present(pair, app: app, window: m.window)
+                return
+            }
             guard let w = axWindow(app) else {
                 // Running but no window (common for Transmit/TablePlus): a "reopen" asks for its default window.
                 if !reopened, elapsed > 0.6, let url = app.bundleURL {
@@ -430,12 +461,14 @@ final class Drawer {
                 }
                 return
             }
-            // The window exists but isn't on this desktop: macOS gives no public way to move it here.
+            // The window is on another desktop. There's no public API to move it, but a window restored from
+            // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
             if !onCurrentSpace(app) {
+                // A just-unhidden window can take a moment to show up as on-screen: give it a beat first.
                 if windowSeenAt == nil { windowSeenAt = CACurrentMediaTime() }
-                if CACurrentMediaTime() - windowSeenAt! > 0.5 {
-                    t.invalidate(); self.pending[pair.id] = nil; self.warnOtherSpace(pair.drawerID)
-                }
+                if CACurrentMediaTime() - windowSeenAt! < 0.3 { return }
+                spaceMove = (w, CACurrentMediaTime(), false)
+                setMinimized(w, true)
                 return
             }
             t.invalidate()
@@ -468,8 +501,6 @@ final class Drawer {
         let pairs = (st?.sessions.map(\.pair) ?? []) + [pair]
         guard let open = stageLayout(area: area, pairs: pairs).drawers[pair.id] else { return }
         setFrame(w, closedFrame(open, edge: pair.edge))
-        if learnMinSize(pair.drawerID, window: w, asked: open.size),
-           let fixed = stageLayout(area: area, pairs: pairs).drawers[pair.id] { setFrame(w, closedFrame(fixed, edge: pair.edge)) }
     }
 
     private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement) {
@@ -477,10 +508,6 @@ final class Drawer {
         let before = st.layout()
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
-        if let guess = st.layout().drawers[pair.id] {
-            setFrame(w, closedFrame(guess, edge: pair.edge))
-            learnMinSize(pair.drawerID, window: w, asked: guess.size)   // so the layout below respects it
-        }
         let after = st.layout()
         guard let open = after.drawers[pair.id] else { return }
 
@@ -514,6 +541,17 @@ final class Drawer {
             s.onPopOut = { [weak self, weak st, weak s] in if let st, let s { self?.popOut(st, s) } }
             s.watchMoves(app: app)
             st.quietUntil = CACurrentMediaTime() + 0.4   // let our last resizes land before watching for user moves
+            // Once settled, check the app kept the size we asked for. If it won't go that small (Rex has a
+            // minimum height), remember that and re-fit so the drawer stays anchored to its edge.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak st, weak s] in
+                guard let st, let s, s.docked, let f = axFrame(w),
+                      f.width > s.expected.width + 1 || f.height > s.expected.height + 1 else { return }
+                setSize(w, s.expected.size)   // ask once more, in case the app was just slow
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak st, weak s] in
+                    guard let self, let st, let s, s.docked, st.sessions.contains(where: { $0 === s }) else { return }
+                    if learnMinSize(pair.drawerID, window: w, asked: s.expected.size) { self.applyLayout(st) }
+                }
+            }
         }
     }
 
@@ -654,10 +692,15 @@ final class Drawer {
     private func relayout(_ st: Stage) {
         guard stages[st.mainID] === st, let mw = st.mainWindow, let area = axFrame(mw) else { return }
         st.area = area
+        applyLayout(st)
+    }
+
+    /// Move the main window and every open drawer to the stage's current layout.
+    private func applyLayout(_ st: Stage) {
         let l = st.layout()
         st.quietUntil = CACurrentMediaTime() + 0.6
         st.setMain(l.main)
-        if st.tiled { OpenState.save(st.mainID, mainFrame: area) }
+        if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
         for s in st.sessions {
             guard let target = l.drawers[s.pair.id], let from = axFrame(s.window) else { continue }
             s.expected = target
@@ -679,8 +722,8 @@ final class Drawer {
         let alert = NSAlert()
         alert.messageText = "\(appName(id))'s window is on another desktop"
         alert.informativeText = """
-            macOS doesn't let Drawer move windows between desktops. To have \(appName(id)) show up on whichever \
-            desktop you're on, right-click its Dock icon → Options → Assign To: All Desktops.
+            Drawer couldn't bring it to this desktop. To have \(appName(id)) show up on whichever desktop \
+            you're on, right-click its Dock icon → Options → Assign To: All Desktops.
             """
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()

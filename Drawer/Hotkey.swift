@@ -64,31 +64,44 @@ final class Hotkey {
     // MARK: Tap (own thread)
 
     /// Creates the tap once Accessibility is allowed, and tears it down the moment it's revoked: an active
-    /// tap whose permission is pulled can leave macOS holding back all input (a frozen Mac) until it's gone.
+    /// tap whose permission is pulled makes macOS reject every event passing through it (a frozen Mac)
+    /// until it's gone. AXIsProcessTrusted() can't tell — it keeps answering "yes" for the rest of the
+    /// process's life — so a fresh helper process asks instead (see liveTrusted).
     private func runTap() {
         let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
         let mask = types.reduce(CGEventMask(0)) { $0 | CGEventMask(1 << $1.rawValue) }
         while true {
-            while !AXIsProcessTrusted() { Thread.sleep(forTimeInterval: 1) }
+            while !liveTrusted() { Thread.sleep(forTimeInterval: 1) }
             guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                             eventsOfInterest: mask, callback: { _, type, event, ctx in
                 let me = Unmanaged<Hotkey>.fromOpaque(ctx!).takeUnretainedValue()
                 return me.handle(type, event) ? nil : Unmanaged.passUnretained(event)
             }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { Thread.sleep(forTimeInterval: 2); continue }
             tap = t
-            let loop = CFRunLoopGetCurrent()
+            let loop = CFRunLoopGetCurrent()!
             let src = CFMachPortCreateRunLoopSource(nil, t, 0)
             CFRunLoopAddSource(loop, src, .commonModes)
-            // Watchdog on this same thread: drop the tap as soon as the permission goes away.
-            let watchdog = CFRunLoopTimerCreateWithHandler(nil, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0) { _ in
-                if !AXIsProcessTrusted() { CGEvent.tapEnable(tap: t, enable: false); CFRunLoopStop(loop) }
-            }
-            CFRunLoopAddTimer(loop, watchdog, .commonModes)
             CGEvent.tapEnable(tap: t, enable: true)
-            CFRunLoopRun()   // returns only when the watchdog stops it
-            CFRunLoopTimerInvalidate(watchdog)
+            // Watchdog off the tap thread (spawning the helper must never hold up input).
+            let stop = NSLock(); var stopped = false
+            let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+            watchdog.schedule(deadline: .now() + 1, repeating: 1)
+            watchdog.setEventHandler {
+                guard !liveTrusted() else { return }
+                stop.lock(); defer { stop.unlock() }
+                guard !stopped else { return }
+                stopped = true
+                CGEvent.tapEnable(tap: t, enable: false)   // input flows again right away
+                CFRunLoopStop(loop)
+            }
+            watchdog.resume()
+            while true {   // CFRunLoopRun can also return on its own; only leave when the watchdog says so
+                CFRunLoopRun()
+                stop.lock(); let done = stopped; stop.unlock()
+                if done { break }
+            }
+            watchdog.cancel()
             CFRunLoopRemoveSource(loop, src, .commonModes)
-            CGEvent.tapEnable(tap: t, enable: false)
             CFMachPortInvalidate(t)
             tap = nil
             pressedAt = nil
@@ -99,8 +112,9 @@ final class Hotkey {
     /// Returns true to swallow the event. Must stay fast and never block.
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            // Re-enable only while allowed; otherwise the watchdog is about to remove the tap.
-            if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
+            // macOS turned the tap off (slow callback, or permission pulled). Turning it back on is safe:
+            // if the permission is gone, the watchdog removes the tap within a second.
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
         let s = current()
@@ -148,4 +162,19 @@ final class Hotkey {
         }
         return true
     }
+}
+
+/// Whether Drawer is allowed Accessibility *right now*. Runs Drawer's own binary with --trust-check:
+/// a new process gets a fresh answer, while this one's AXIsProcessTrusted() stays stuck on "yes".
+func liveTrusted() -> Bool {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    p.arguments = ["--trust-check"]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return AXIsProcessTrusted() }
+    let deadline = Date().addingTimeInterval(2)
+    while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+    if p.isRunning { p.terminate(); return true }   // no answer: assume nothing changed
+    return p.terminationStatus == 0
 }

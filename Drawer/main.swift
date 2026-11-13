@@ -5,6 +5,9 @@
 import AppKit
 import ServiceManagement
 
+// Helper mode for Hotkey's watchdog: report whether Accessibility is allowed right now, then exit.
+if CommandLine.arguments.contains("--trust-check") { exit(AXIsProcessTrusted() ? 0 : 1) }
+
 let drawer = Drawer()
 let hotkey = Hotkey()
 let settings = SettingsWindow()

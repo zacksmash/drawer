@@ -294,12 +294,9 @@ final class DrawerSession {
     let pair: Pair
     let window: AXUIElement
     var parked: CGPoint = .zero      // where macOS actually let the drawer sit off-screen (it pins windows at the edge)
-    var docked = false               // fully open; edge drags are blocked, and dragging it pops it out (tiled)
-                                     // or springs it back into place (floating)
+    var docked = false               // fully open; edge drags are blocked and dragging it pops it out
     let resizer = AsyncResizer()
     private var observer: AXObserver?
-    private var releaseWatch: Timer?
-    private let spring = Animator()
     var onPopOut: (() -> Void)?
     var expected: CGRect = .zero     // frame we last put it at
 
@@ -318,9 +315,6 @@ final class DrawerSession {
     }
 
     func stopWatching() {
-        releaseWatch?.invalidate()
-        releaseWatch = nil
-        spring.stop()
         if let observer {
             AXObserverRemoveNotification(observer, window, kAXMovedNotification as CFString)
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
@@ -334,28 +328,7 @@ final class DrawerSession {
         guard docked, NSEvent.pressedMouseButtons & 1 != 0,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier == pair.drawerID,
               let now = axFrame(window) else { return }
-        if pair.shrinkMain {
-            if abs(now.minX - expected.minX) + abs(now.minY - expected.minY) > 24 { onPopOut?() }
-        } else {
-            springBackOnRelease()
-        }
-    }
-
-    /// A floating drawer belongs inside its main window: when the user lets go of it, glide it back.
-    private func springBackOnRelease() {
-        guard releaseWatch == nil else { return }
-        spring.stop()
-        let t = Timer(timeInterval: 0.03, repeats: true) { [weak self] t in
-            guard let self else { t.invalidate(); return }
-            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }   // still dragging
-            t.invalidate()
-            self.releaseWatch = nil
-            guard self.docked, let from = axFrame(self.window), from.origin != self.expected.origin else { return }
-            let w = self.window, to = CGRect(origin: self.expected.origin, size: from.size)
-            self.spring.run(duration: 0.25, curve: easeOutCubic, step: { e in setPos(w, lerp(from, to, e).origin) }, done: {})
-        }
-        RunLoop.main.add(t, forMode: .common)
-        releaseWatch = t
+        if abs(now.minX - expected.minX) + abs(now.minY - expected.minY) > 24 { onPopOut?() }
     }
 }
 
@@ -389,6 +362,60 @@ final class WindowCreationWatcher {
         for n in Self.reshown { AXObserverRemoveNotification(observer, app, n as CFString) }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
     }
+}
+
+/// A drawer window the user dragged out. Tracks where it is until it closes, so its app can be told to
+/// reopen it in the drawer spot instead (see Drawer.forgetMovedSpot).
+final class PoppedWindow {
+    let pair: Pair
+    let window: AXUIElement
+    private(set) var lastFrame: CGRect
+    var onClosed: ((PoppedWindow) -> Void)?
+    private var observer: AXObserver?
+    private static let notes = [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification]
+
+    init(pair: Pair, window: AXUIElement, pid: pid_t, frame: CGRect) {
+        (self.pair, self.window, self.lastFrame) = (pair, window, frame)
+        var obs: AXObserver?
+        guard AXObserverCreate(pid, { _, _, note, refcon in
+            Unmanaged<PoppedWindow>.fromOpaque(refcon!).takeUnretainedValue().changed(note as String)
+        }, &obs) == .success, let obs else { return }
+        for n in Self.notes { AXObserverAddNotification(obs, window, n as CFString, Unmanaged.passUnretained(self).toOpaque()) }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
+        observer = obs
+    }
+
+    private func changed(_ note: String) {
+        if note == kAXUIElementDestroyedNotification as String { onClosed?(self); return }
+        if let f = axFrame(window) { lastFrame = f }
+    }
+
+    deinit {
+        guard let observer else { return }
+        for n in Self.notes { AXObserverRemoveNotification(observer, window, n as CFString) }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+}
+
+/// Many Mac apps remember where each window was ("NSWindow Frame <name>" in their preferences) and reopen it
+/// there. Point the entries that match `from` at `to` instead. Apps that save frames another way are untouched.
+func rewriteSavedFrames(app: String, from: CGRect, to: CGRect) {
+    let primaryH = NSScreen.screens[0].frame.height
+    let cocoa = { (r: CGRect) in [r.minX, primaryH - r.maxY, r.width, r.height].map(Double.init) }
+    let old = cocoa(from), new = cocoa(to)
+    let domain = app as CFString
+    guard let keys = CFPreferencesCopyKeyList(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] else { return }
+    var changed = false
+    for key in keys where key.hasPrefix("NSWindow Frame ") {
+        guard let value = CFPreferencesCopyAppValue(key as CFString, domain) as? String else { continue }
+        var tokens = value.split(separator: " ").map(String.init)
+        let nums = tokens.prefix(4).compactMap(Double.init)
+        guard nums.count == 4, zip(nums, old).allSatisfy({ abs($0 - $1) < 3 }) else { continue }
+        for i in 0..<4 { tokens[i] = String(Int(new[i].rounded())) }
+        CFPreferencesSetAppValue(key as CFString, (tokens.joined(separator: " ") + " ") as CFString, domain)
+        changed = true
+    }
+    if changed { CFPreferencesAppSynchronize(domain) }
 }
 
 /// A main window and the drawers currently open around it.
@@ -454,6 +481,8 @@ final class Drawer {
     /// The window each drawer app last showed in a drawer. Many apps (Rex, Electron apps) only hide a window
     /// when it's closed and show the same one again on reopen, so it can be parked before it reappears.
     private var lastWindows: [String: AXUIElement] = [:]
+    /// Drawer windows the user dragged out, by drawer app, until they close or dock again.
+    private var popped: [String: PoppedWindow] = [:]
 
     var lockedFrames: [CGRect] { stages.values.flatMap { $0.sessions.filter(\.docked).map(\.expected) } }
     var openAppIDs: Set<String> { Set(stages.values.flatMap { st in st.sessions.map(\.pair.drawerID) + [st.mainID] }) }
@@ -488,6 +517,19 @@ final class Drawer {
                   let st = self.stages[id] else { return }
             for s in st.sessions where s.docked && !s.pair.shrinkMain { self.close(s.pair.id, raise: false) }
         }
+        // Quitting an app with a dragged-out drawer window closes that window too.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
+                  let p = self.popped[id] else { return }
+            self.forgetMovedSpot(p)
+        }
+    }
+
+    /// A dragged-out drawer window closed: make its app reopen it in the drawer spot, not where it was moved to.
+    private func forgetMovedSpot(_ p: PoppedWindow) {
+        popped[p.pair.drawerID] = nil
+        rewriteSavedFrames(app: p.pair.drawerID, from: p.lastFrame, to: openFrame(p.pair))
     }
 
     // MARK: Opening
@@ -495,6 +537,7 @@ final class Drawer {
     /// Launch the drawer app if needed, wait for its window, then slide it in.
     func show(_ pair: Pair) {
         pending[pair.id]?.invalidate()
+        popped[pair.drawerID] = nil   // docking it again; no need to remember the moved spot
         let started = CACurrentMediaTime()
         var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?
@@ -605,11 +648,15 @@ final class Drawer {
 
     /// Where the drawer would open now, parked just off-screen.
     private func park(_ pair: Pair, _ w: AXUIElement) {
+        setFrame(w, closedFrame(openFrame(pair), edge: pair.edge))
+    }
+
+    /// Where `pair`'s drawer would sit if it opened now.
+    private func openFrame(_ pair: Pair) -> CGRect {
         let st = stages[pair.mainID]
         let area = st?.area ?? running(pair.mainID).flatMap(axWindow).flatMap(axFrame) ?? Self.screenArea()
-        let pairs = (st?.sessions.map(\.pair) ?? []) + [pair]
-        guard let open = stageLayout(area: area, pairs: pairs).drawers[pair.id] else { return }
-        setFrame(w, closedFrame(open, edge: pair.edge))
+        let pairs = (st?.sessions.filter { $0.pair.id != pair.id }.map(\.pair) ?? []) + [pair]
+        return stageLayout(area: area, pairs: pairs).drawers[pair.id] ?? area
     }
 
     private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement) {
@@ -744,6 +791,10 @@ final class Drawer {
     private func popOut(_ st: Stage, _ s: DrawerSession) {
         guard st.sessions.contains(where: { $0 === s }) else { return }
         detach(st, s, hide: false)
+        guard let app = running(s.pair.drawerID) else { return }
+        let p = PoppedWindow(pair: s.pair, window: s.window, pid: app.processIdentifier, frame: axFrame(s.window) ?? s.expected)
+        p.onClosed = { [weak self] p in self?.forgetMovedSpot(p) }
+        popped[s.pair.drawerID] = p
     }
 
     /// Put everything back immediately (used when Drawer quits).

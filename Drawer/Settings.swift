@@ -45,35 +45,54 @@ struct DrawersTab: View {
     @State private var editing: Pair?
     @State private var isNew = false
 
+    /// Main apps in the order they first appear.
+    private var mains: [String] {
+        var seen = Set<String>()
+        return cfg.pairs.map(\.mainID).filter { seen.insert($0).inserted }
+    }
+
     var body: some View {
         Form {
-            Section {
-                if cfg.pairs.isEmpty {
-                    Text("No drawers yet.").foregroundStyle(.secondary)
-                }
-                ForEach(cfg.pairs) { pair in
-                    Button { isNew = false; editing = pair } label: { DrawerRow(pair: pair) }
+            if cfg.pairs.isEmpty {
+                Section { Text("No drawers yet.").foregroundStyle(.secondary) }
+            }
+            ForEach(mains, id: \.self) { main in
+                Section {
+                    ForEach(cfg.pairs.filter { $0.mainID == main }) { pair in
+                        Button { isNew = false; editing = pair } label: {
+                            DrawerRow(pair: pair, conflict: conflict(pair))
+                        }
                         .buttonStyle(.plain)
                         .contextMenu {
                             Button("Edit…") { isNew = false; editing = pair }
                             Button("Remove", role: .destructive) { cfg.pairs.removeAll { $0.id == pair.id } }
                         }
+                    }
+                } header: {
+                    HStack(spacing: 8) {
+                        AppIcon(id: main, size: 18)
+                        Text(appName(main))
+                        Spacer()
+                        Button { isNew = true; editing = Pair(mainID: main, drawerID: "", edge: freeEdge(for: main)) } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Add another drawer to \(appName(main))")
+                    }
                 }
-            } header: {
-                Text("Drawers")
+            }
+            Section {
             } footer: {
                 HStack(alignment: .top) {
-                    footnote
+                    Text("Each drawer opens with its shortcut while its main app is in front.")
+                        .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Add Drawer…") {
-                        isNew = true
-                        editing = Pair(mainID: "", drawerID: "")
-                    }
+                    Button("Add Drawer…") { isNew = true; editing = Pair(mainID: "", drawerID: "") }
                 }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: min(560, 170 + CGFloat(max(cfg.pairs.count, 1)) * 58))
+        .frame(width: 540, height: min(620, 110 + CGFloat(mains.count) * 50 + CGFloat(max(cfg.pairs.count, 1)) * 58))
         .sheet(item: $editing) { pair in
             DrawerEditor(draft: pair, isNew: isNew) { result in
                 switch result {
@@ -87,30 +106,41 @@ struct DrawersTab: View {
         }
     }
 
-    @ViewBuilder private var footnote: some View {
-        let mains = cfg.pairs.map(\.mainID)
-        if Set(mains).count != mains.count {
-            Label("Two drawers use the same main app. Only the first one will open.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-        } else {
-            Text("Press \(cfg.shortcut.display) in a main app to open its drawer.")
-                .foregroundStyle(.secondary)
+    private func freeEdge(for main: String) -> Edge {
+        let used = Set(cfg.pairs.filter { $0.mainID == main }.map(\.edge))
+        return Edge.allCases.first { !used.contains($0) } ?? .bottom
+    }
+
+    /// Why this drawer clashes with another one on the same main app, if it does.
+    private func conflict(_ p: Pair) -> String? {
+        let siblings = cfg.pairs.filter { $0.mainID == p.mainID && $0.id != p.id }
+        if siblings.contains(where: { $0.edge == p.edge }) { return "Another drawer uses this edge" }
+        if let i = cfg.pairs.firstIndex(where: { $0.id == p.id }),
+           cfg.pairs[..<i].contains(where: { $0.mainID == p.mainID && $0.effectiveShortcut == p.effectiveShortcut }) {
+            return "Same shortcut as another drawer — it won't open"
         }
+        return nil
     }
 }
 
 struct DrawerRow: View {
     let pair: Pair
+    var conflict: String?
 
     var body: some View {
         HStack(spacing: 12) {
-            AppIcon(id: pair.mainID, size: 32)
+            AppIcon(id: pair.drawerID, size: 30)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(appName(pair.mainID))  →  \(appName(pair.drawerID))")
-                Text(pair.summary).font(.callout).foregroundStyle(.secondary)
+                Text(appName(pair.drawerID))
+                if let conflict {
+                    Label(conflict, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                } else {
+                    Text(pair.summary).font(.callout).foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            AppIcon(id: pair.drawerID, size: 24)
+            HStack(spacing: 3) { ForEach(pair.effectiveShortcut.keys, id: \.self) { KeyCap(text: $0) } }
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
@@ -160,6 +190,19 @@ struct DrawerEditor: View {
                         Text("Resizes the main window so the two sit side by side like tiled windows. When off, the drawer floats over it.")
                     }
                 }
+                Section {
+                    Toggle("Use the default shortcut", isOn: Binding(
+                        get: { draft.shortcut == nil },
+                        set: { draft.shortcut = $0 ? nil : Config.shared.shortcut }))
+                    if let sc = draft.shortcut {
+                        LabeledContent("Shortcut") {
+                            ShortcutRecorder(shortcut: Binding(get: { sc }, set: { draft.shortcut = $0 }), showsReset: false)
+                        }
+                    }
+                } footer: {
+                    Text("Give each drawer on the same main app its own shortcut, like one per edge.")
+                        .foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
             .pickerStyle(.segmented)
@@ -177,7 +220,7 @@ struct DrawerEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 480, height: 570)
+        .frame(width: 480, height: 680)
     }
 }
 
@@ -310,7 +353,7 @@ struct GeneralTab: View {
     var body: some View {
         Form {
             Section("Keyboard") {
-                LabeledContent("Shortcut") { ShortcutRecorder(shortcut: $cfg.shortcut) }
+                LabeledContent("Default shortcut") { ShortcutRecorder(shortcut: $cfg.shortcut) }
                 Toggle(isOn: $cfg.peek) {
                     Text("Hold to peek")
                     Text("Hold the shortcut to show the drawer, and release to hide it.")
@@ -362,6 +405,7 @@ struct GeneralTab: View {
 /// Shows the shortcut as key caps; click, then press the new shortcut (needs ⌃, ⌥ or ⌘; fn optional). Esc cancels.
 struct ShortcutRecorder: View {
     @Binding var shortcut: Shortcut
+    var showsReset = true
     @State private var recording = false
     @State private var monitor: Any?
 
@@ -385,7 +429,7 @@ struct ShortcutRecorder: View {
             .buttonStyle(.plain)
             .help("Click to record a new shortcut")
 
-            if shortcut != .default && !recording {
+            if showsReset && shortcut != .default && !recording {
                 Button { shortcut = .default } label: { Image(systemName: "arrow.counterclockwise") }
                     .buttonStyle(.borderless)
                     .help("Reset to \(Shortcut.default.display)")

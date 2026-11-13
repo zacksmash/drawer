@@ -16,9 +16,12 @@ struct Pair: Codable, Identifiable, Equatable {
     var edge: Edge = .bottom
     var size: Double = 0.5          // share of the main window's height (bottom) or width (left/right)
     var shrinkMain: Bool = false    // tile next to the main window instead of overlaying it
+    var shortcut: Shortcut?         // nil = use the default shortcut
+
+    var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut }
 }
 
-struct Shortcut: Codable, Equatable {
+struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
 
@@ -88,7 +91,13 @@ final class Config: ObservableObject {
         d.set(try? JSONEncoder().encode(v), forKey: key)
     }
 
-    func pair(forMain id: String?) -> Pair? { pairs.first { $0.mainID == id } }
+    /// Drawers configured for `main` that `shortcut` opens.
+    func pairs(forMain main: String?, shortcut: Shortcut) -> [Pair] {
+        pairs.filter { $0.mainID == main && $0.effectiveShortcut == shortcut }
+    }
+
+    /// Every distinct shortcut in use.
+    var allShortcuts: [Shortcut] { Array(Set(pairs.map(\.effectiveShortcut) + [shortcut]).map { $0 }) }
 }
 
 /// Gap macOS puts between tiled windows (System Settings → Desktop & Dock → "Tiled windows have margins").

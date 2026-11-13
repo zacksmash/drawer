@@ -14,7 +14,7 @@ final class Hotkey {
         var front: String?
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
-        var shortcut = Shortcut.default
+        var shortcuts: [Shortcut] = [.default]
         var peek = true
     }
 
@@ -23,7 +23,8 @@ final class Hotkey {
     private var tap: CFMachPort?
 
     // Tap-thread state.
-    private var pressedAt: CFTimeInterval?   // set while we're swallowing a press of the shortcut key
+    private var pressedAt: CFTimeInterval?   // set while we're swallowing a press of a shortcut key
+    private var pressedKey: Int64 = -1
     private var blockingDrag = false
     private let peekThreshold = 0.35
 
@@ -53,7 +54,7 @@ final class Hotkey {
         s.front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs)
         s.lockedFrames = drawer.lockedFrames
-        s.shortcut = Config.shared.shortcut
+        s.shortcuts = Config.shared.allShortcuts
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
     }
@@ -103,10 +104,10 @@ final class Hotkey {
             break
         }
 
-        guard event.getIntegerValueField(.keyboardEventKeycode) == Int64(s.shortcut.keyCode) else { return false }
+        let key = event.getIntegerValueField(.keyboardEventKeycode)
 
         if type == .keyUp {
-            guard let start = pressedAt else { return false }
+            guard let start = pressedAt, key == pressedKey else { return false }
             pressedAt = nil
             if s.peek, CACurrentMediaTime() - start > peekThreshold {
                 DispatchQueue.main.async {   // held → it was a peek
@@ -117,12 +118,14 @@ final class Hotkey {
             return true
         }
 
-        if pressedAt != nil { return true }   // auto-repeat while held
-        guard event.flags.intersection(Shortcut.modifierMask) == s.shortcut.cgFlags,
+        if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
+        let flags = event.flags.intersection(Shortcut.modifierMask)
+        guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }),
               let front = s.front, s.handledFronts.contains(front) else { return false }
         pressedAt = CACurrentMediaTime()
+        pressedKey = key
         DispatchQueue.main.async {
-            self.openedByPress = drawer.toggle()
+            self.openedByPress = drawer.toggle(shortcut)
             self.refresh()
         }
         return true

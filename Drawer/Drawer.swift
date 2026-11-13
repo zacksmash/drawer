@@ -171,6 +171,8 @@ final class Animator: NSObject {
         link = l
     }
 
+    var isRunning: Bool { link != nil }
+
     func stop() {
         link?.invalidate(); link = nil
         (step, done) = ({ _ in }, {})   // drop closures so sessions they capture can be freed
@@ -219,7 +221,13 @@ final class DrawerSession {
     let resizer = AsyncResizer()
     var pending: Timer?
     private var observer: AXObserver?
+    private var mainObserver: AXObserver?
     var onPopOut: (() -> Void)?
+    var onMainChanged: (() -> Void)?
+    /// Main window frame we last set (or expect); a different frame means the user moved/re-tiled it.
+    var expectedMain: CGRect?
+    var quietUntil: CFTimeInterval = 0   // ignore main-window notifications caused by our own changes
+    var relayoutTimer: Timer?
 
     init(pair: Pair) { self.pair = pair }
 
@@ -234,16 +242,39 @@ final class DrawerSession {
         observer = obs
     }
 
+    /// Watch the main window being moved or re-tiled, so the drawer can follow it.
+    func watchMain(app: NSRunningApplication, window: AXUIElement) {
+        var obs: AXObserver?
+        guard AXObserverCreate(app.processIdentifier, { _, _, _, refcon in
+            Unmanaged<DrawerSession>.fromOpaque(refcon!).takeUnretainedValue().onMainChanged?()
+        }, &obs) == .success, let obs else { return }
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(obs, window, kAXMovedNotification as CFString, me)
+        AXObserverAddNotification(obs, window, kAXResizedNotification as CFString, me)
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
+        mainObserver = obs
+    }
+
     func stopWatching() {
         if let observer {
             if let window { AXObserverRemoveNotification(observer, window, kAXMovedNotification as CFString) }
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
+        if let mainObserver {
+            if let mainWindow {
+                AXObserverRemoveNotification(mainObserver, mainWindow, kAXMovedNotification as CFString)
+                AXObserverRemoveNotification(mainObserver, mainWindow, kAXResizedNotification as CFString)
+            }
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(mainObserver), .commonModes)
+        }
         observer = nil
+        mainObserver = nil
+        relayoutTimer?.invalidate()
     }
 
     private func moved() {
-        guard let locked = lockedFrame, let window, let now = axFrame(window) else { return }
+        guard !animator.isRunning,   // our own relayout slide isn't a pop-out
+              let locked = lockedFrame, let window, let now = axFrame(window) else { return }
         if abs(now.minX - locked.minX) + abs(now.minY - locked.minY) > 24 { onPopOut?() }
     }
 }
@@ -377,6 +408,7 @@ final class Drawer {
     private func present(_ s: DrawerSession, app: NSRunningApplication, window w: AXUIElement) {
         let pair = s.pair
         let (area, mainWindow) = mainArea(pair)
+        let main = running(pair.mainID)
 
         var l = layout(pair, area: area)
         setFrame(w, l.closed)
@@ -403,6 +435,12 @@ final class Drawer {
             s.lockedFrame = axFrame(w) ?? l.open
             s.onPopOut = { self?.popOut(s) }
             s.watchMoves(app: app, window: w)
+            s.expectedMain = shrink != nil ? l.mainShrunk : area
+            s.quietUntil = CACurrentMediaTime() + 0.4   // let our last main resize land first
+            if let main, let mw = mainWindow {
+                s.onMainChanged = { self?.mainChanged(s) }
+                s.watchMain(app: main, window: mw)
+            }
         }
     }
 
@@ -431,6 +469,60 @@ final class Drawer {
             app?.hide()
             if let main = running(s.pair.mainID) { bringToFront(main, s.mainWindow) }
         }
+    }
+
+    // MARK: Following the main window
+
+    /// The main window moved or resized while the drawer is open.
+    /// Moved (same size) → shift the drawer along live. Resized/re-tiled → re-lay out once it settles.
+    private func mainChanged(_ s: DrawerSession) {
+        guard sessions[s.pair.id] === s, s.lockedFrame != nil, !s.animator.isRunning,
+              CACurrentMediaTime() > s.quietUntil,
+              let mw = s.mainWindow, let now = axFrame(mw), let expected = s.expectedMain else { return }
+        let near = { (a: CGFloat, b: CGFloat) in abs(a - b) < 2 }
+        if near(now.minX, expected.minX), near(now.minY, expected.minY),
+           near(now.width, expected.width), near(now.height, expected.height) { return }   // our own change
+
+        if near(now.width, expected.width), near(now.height, expected.height) {
+            let (dx, dy) = (now.minX - expected.minX, now.minY - expected.minY)
+            s.expectedMain = now
+            s.mainFrame = s.mainFrame.offsetBy(dx: dx, dy: dy)
+            if let locked = s.lockedFrame, let w = s.window {
+                let moved = locked.offsetBy(dx: dx, dy: dy)
+                s.lockedFrame = moved   // update first, so the drawer's own move isn't seen as a pop-out
+                setPos(w, moved.origin)
+                s.parked = s.pair.edge == .bottom ? CGPoint(x: moved.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: moved.minY)
+            }
+            if s.pair.shrinkMain { OpenState.save(s.pair.id, mainFrame: s.mainFrame) }
+        } else {
+            s.relayoutTimer?.invalidate()
+            let t = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in self?.relayout(s) }
+            RunLoop.main.add(t, forMode: .common)
+            s.relayoutTimer = t
+        }
+    }
+
+    /// The main window got a new size (e.g. re-tiled): treat it as the new full area and fit the drawer to it.
+    private func relayout(_ s: DrawerSession) {
+        guard sessions[s.pair.id] === s, let w = s.window, let mw = s.mainWindow,
+              let area = axFrame(mw), let from = axFrame(w) else { return }
+        s.mainFrame = area
+        var l = layout(s.pair, area: area)
+        s.lockedFrame = l.open
+        setSize(w, l.open.size)
+        if let actual = axFrame(w)?.size, actual != l.open.size { l = layout(s.pair, area: area, drawerSize: actual) }
+        s.lockedFrame = l.open
+        s.parked = s.pair.edge == .bottom ? CGPoint(x: l.open.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: l.open.minY)
+        s.expectedMain = s.pair.shrinkMain ? l.mainShrunk : area
+        s.quietUntil = CACurrentMediaTime() + 0.6
+        if s.pair.shrinkMain {
+            OpenState.save(s.pair.id, mainFrame: area)
+            if let target = l.mainShrunk { s.resizer.request(mw, target) }
+        }
+        let start = CGRect(origin: from.origin, size: l.open.size)
+        s.animator.run(duration: 0.2, curve: easeOutCubic, step: { e in
+            setPos(w, lerp(start, l.open, e).origin)
+        }, done: {})
     }
 
     /// The user dragged the drawer away: let it be a normal window and give the main window its space back.

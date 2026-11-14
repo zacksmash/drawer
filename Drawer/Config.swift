@@ -17,6 +17,7 @@ struct Pair: Codable, Identifiable, Equatable {
     var size: Double = 0.5          // share of the main window's height (bottom) or width (left/right)
     var shrinkMain: Bool = false    // tile next to the main window instead of overlaying it
     var shortcut: Shortcut?         // nil = use the edge's shortcut
+    var previousSize: Double?       // size before the last edge drag (double-clicking the edge goes back)
 
     var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut(for: edge) }
 

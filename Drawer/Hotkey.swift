@@ -29,6 +29,7 @@ final class Hotkey {
     private var pressedKey: Int64 = -1
     private var blockingDrag = false
     private var resizing: UUID?              // drawer whose inner edge is being dragged
+    private var resizeIsDoubleClick = false
     private let peekThreshold = 0.35
 
     // Main-thread state.
@@ -131,6 +132,12 @@ final class Hotkey {
             // so the drawer and the main window move together and the app never fights it.
             if let h = s.resizeHandles.first(where: { $0.rect.contains(p) }) {
                 resizing = h.id
+                resizeIsDoubleClick = event.getIntegerValueField(.mouseEventClickState) >= 2
+                let double = resizeIsDoubleClick
+                DispatchQueue.main.async {   // double-click: back to the size before the last drag
+                    if double { drawer.restorePreviousSize(h.id) } else { drawer.beginResize(h.id) }
+                    self.refresh()
+                }
                 return true
             }
             // Swallow drags that start on an open drawer's other edges, so its app never starts a resize.
@@ -145,6 +152,7 @@ final class Hotkey {
             return blockingDrag
         case .leftMouseDragged:
             if let id = resizing {
+                guard !resizeIsDoubleClick else { return true }
                 let p = event.location
                 DispatchQueue.main.async { drawer.resizeDrawer(id, to: p); self.refresh() }
                 return true
@@ -153,6 +161,7 @@ final class Hotkey {
         case .leftMouseUp:
             if let id = resizing {
                 resizing = nil
+                guard !resizeIsDoubleClick else { return true }
                 DispatchQueue.main.async { drawer.finishResize(id); self.refresh() }
                 return true
             }

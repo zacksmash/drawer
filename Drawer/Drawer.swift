@@ -557,10 +557,32 @@ final class Drawer {
         for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
     }
 
-    /// Done dragging: keep the new size for next time.
+    private var resizeStart: [UUID: Double] = [:]
+
+    func beginResize(_ id: UUID) {
+        if let (_, s) = session(id) { resizeStart[id] = s.pair.size }
+    }
+
+    /// Done dragging: keep the new size for next time, and remember the old one for a double-click.
     func finishResize(_ id: UUID) {
         guard let (_, s) = session(id), let i = Config.shared.pairs.firstIndex(where: { $0.id == id }) else { return }
+        if let start = resizeStart.removeValue(forKey: id), abs(start - s.pair.size) > 0.001 {
+            Config.shared.pairs[i].previousSize = start
+        }
         Config.shared.pairs[i].size = s.pair.size
+    }
+
+    /// Double-clicked the inner edge: go back to the size before the last drag (and again to undo that).
+    func restorePreviousSize(_ id: UUID) {
+        guard let (st, s) = session(id), s.docked, let i = Config.shared.pairs.firstIndex(where: { $0.id == id }),
+              let previous = Config.shared.pairs[i].previousSize else { return }
+        Config.shared.pairs[i].previousSize = s.pair.size
+        Config.shared.pairs[i].size = previous
+        s.pair.size = previous
+        let l = st.layout()
+        st.quietUntil = CACurrentMediaTime() + 0.6
+        if st.tiled { st.setMain(l.main) }
+        for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
     }
     var mainFrames: [(id: String, frame: CGRect)] {
         stages.values.compactMap { st in st.expectedMain.map { (st.mainID, $0) } }

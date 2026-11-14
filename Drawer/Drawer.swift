@@ -920,6 +920,7 @@ final class Drawer {
         var windowSeenAt: CFTimeInterval?
         var spaceMove: (window: AXUIElement, at: CFTimeInterval, restored: Bool)?
         var spaceOrigin: CGRect?   // where that window was, to put it back if it can't be brought over
+        var created: AXUIElement?  // the window the app just created, caught as it appeared
 
         if running(pair.drawerID) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pair.drawerID) else { return }
@@ -939,6 +940,7 @@ final class Drawer {
             if self.creationWatchers[pair.id] == nil {
                 self.creationWatchers[pair.id] = WindowCreationWatcher(pid: app.processIdentifier) { [weak self] w in
                     guard let self, !parked, self.pending[pair.id] != nil, isStandardWindow(w) else { return }
+                    created = w
                     self.park(pair, w)
                     parked = true
                 }
@@ -1017,7 +1019,10 @@ final class Drawer {
                 self.present(pair, app: app, window: m.window)
                 return
             }
-            guard let w = axWindow(app) else { return }
+            // macOS only lists an app's windows on this desktop. A window it just created can land on another
+            // one (TablePlus, reopened while running with no window, opens it on the desktop it was last on):
+            // our handle to it still works, so go on with that one and bring it over below.
+            guard let w = axWindow(app) ?? created.flatMap({ axFrame($0) != nil ? $0 : nil }) else { return }
             // The window is on another desktop. There's no public API to move it, but a window restored from
             // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
             if !onCurrentSpace(app, window: w) {

@@ -111,8 +111,8 @@ final class CarouselController {
                     overlay.play(style, edge: edge, other: other, reversed: reversed) { overlay.close(); finish(true) }
                 }
                 guard style.needsIncoming || reversed, let otherPid = running(to)?.processIdentifier else { play(nil); return }
-                // Give a just-shown window a moment to draw before picturing it.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                // Give a just-shown window a moment to draw (in its active look) before picturing it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     self.capture(pid: otherPid, frame: frame, done: play)
                 }
             }
@@ -199,7 +199,9 @@ final class CarouselController {
                 if !app.isHidden { app.hide(); return }
                 setFrame(w, closed)
                 parked = true
-                app.unhide()
+                // Activating it unhides it already in front; a plain unhide can show it behind the current
+                // app for a frame before it's raised (a flicker).
+                bringToFront(app, w)
                 return
             }
             if app.isHidden { app.unhide(); return }
@@ -251,9 +253,12 @@ final class Transition {
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+        window.animationBehavior = .none
         let view = NSView(frame: NSRect(origin: .zero, size: r.size))
         view.wantsLayer = true
         window.contentView = view
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         root.frame = view.bounds
         root.masksToBounds = true
         // Clip to the window's own rounded corners, so pictures sliding in never show a square corner.
@@ -302,6 +307,9 @@ final class Transition {
     /// so the current app backs out to `edge`. The real window that ends up showing already sits underneath,
     /// so wherever the pictures leave a gap it shows through.
     func play(_ style: CarouselStyle, edge: Edge, other image: CGImage?, reversed: Bool, done: @escaping () -> Void) {
+        // Set everything up without Core Animation's implicit fades (they'd show as a flicker).
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         // Roles as in the forward animation: `outgoing` is covered or leaves, `incoming` arrives.
         let otherLayer = CALayer()
         if let image { configure(otherLayer, image) }
@@ -402,5 +410,15 @@ final class Transition {
         animator.run(duration: duration, curve: curve, step: step, done: done)
     }
 
-    func close() { window.orderOut(nil) }
+    /// Lift the pictures off with a very quick fade, so any difference from the live window underneath
+    /// (a redraw, the active look) blends in rather than snapping.
+    func close() {
+        let start = CACurrentMediaTime()
+        let t = Timer(timeInterval: 1 / 120, repeats: true) { [window] t in
+            let p = (CACurrentMediaTime() - start) / 0.08
+            if p >= 1 { t.invalidate(); window.orderOut(nil); return }
+            window.alphaValue = 1 - p
+        }
+        RunLoop.main.add(t, forMode: .common)
+    }
 }

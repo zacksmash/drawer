@@ -122,3 +122,7 @@ Drawer is free and built in spare time. If it saves you a few hundred <kbd>⌘</
 </p>
 
 Sponsorships help cover an Apple Developer account, so future releases can be signed and notarized and open with a double-click. Bug reports and ideas are welcome in [Issues](https://github.com/zacksmash/drawer/issues).
+
+## License
+
+[MIT](LICENSE) © Zack Warren

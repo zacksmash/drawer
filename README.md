@@ -86,14 +86,14 @@ Change them under **General → Keyboard**, or give a single drawer its own shor
   - 🟢 switches between its size and Full.
 - **Drag a drawer out** by its title bar to use it as a normal window. Close it and it goes back to its drawer spot next time.
 - **Click the main window** to dismiss overlay drawers. Coming back to it from another app with a click brings them back on top instead. **Move the main window** and its drawers hide instantly.
-- **Switching to a drawer app** from the Dock or <kbd>⌘</kbd><kbd>Tab</kbd> opens it in its drawer.
+- **Switching to a drawer or carousel app** from the Dock or <kbd>⌘</kbd><kbd>Tab</kbd> puts it in its spot (General → Open drawer apps in their drawer).
 
 ### Carousels
 
 1. **Carousels** tab → **Add Carousel…**
 2. Choose a **main app**, then **Add App** for each app in the rotation. Reorder them with the arrows.
 
-While any app in the carousel is in front, or under the pointer:
+While any app in the carousel is in front, or under the pointer (General → Carousels follow the pointer):
 
 | Input | Does |
 | --- | --- |
@@ -111,7 +111,7 @@ Move or resize whichever app is showing and the rest follow. The carousel's spot
 
 - Drawer only moves and resizes windows through the Accessibility API. It never injects into or modifies other apps.
 - Apps with a minimum window size (some won't go below a certain height) are fitted as closely as they allow.
-- A window on another desktop (Space) is brought over to the current one before it slides in.
+- A window on another desktop (Space) is brought over to the current one before it slides in. If macOS won't allow it, Drawer suggests assigning that app to **All Desktops** (right-click its Dock icon → Options).
 - Built and tested on macOS 27. It needs macOS 14 or later.
 
 ## Support

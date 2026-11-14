@@ -57,7 +57,8 @@ enum TrafficLight: CaseIterable {
     }
 }
 
-/// Apps that take turns in one spot: the main app's window. fn⌃. / fn⌃, cycle through them.
+/// Apps that take turns in one spot: the main app's window. The left and right edge shortcuts (and fn + swipe)
+/// cycle through them.
 struct Carousel: Codable, Identifiable, Equatable {
     var id = UUID()
     var mainID: String
@@ -85,15 +86,22 @@ struct Shortcut: Codable, Hashable {
 
     var cgFlags: CGEventFlags { CGEventFlags(rawValue: flags) }
 
-    var display: String {
+    /// Individual key caps, e.g. ["fn", "⌃", "D"].
+    var keys: [String] {
         let f = cgFlags
-        var s = ""
-        if f.contains(.maskSecondaryFn) { s += "fn " }
-        if f.contains(.maskControl) { s += "⌃" }
-        if f.contains(.maskAlternate) { s += "⌥" }
-        if f.contains(.maskShift) { s += "⇧" }
-        if f.contains(.maskCommand) { s += "⌘" }
-        return s + keyName(keyCode)
+        var k: [String] = []
+        if f.contains(.maskSecondaryFn) { k.append("fn") }
+        if f.contains(.maskControl) { k.append("⌃") }
+        if f.contains(.maskAlternate) { k.append("⌥") }
+        if f.contains(.maskShift) { k.append("⇧") }
+        if f.contains(.maskCommand) { k.append("⌘") }
+        return k + [keyName(keyCode)]
+    }
+
+    /// As text, e.g. "fn ⌃D".
+    var display: String {
+        let k = keys
+        return k.first == "fn" ? "fn " + k.dropFirst().joined() : k.joined()
     }
 }
 
@@ -126,7 +134,7 @@ final class Config: ObservableObject {
     @Published var carousels: [Carousel] { didSet { store(carousels, "carousels") } }
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
-    @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // shortcuts act on the app under the pointer
+    @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // carousel shortcuts and swipes act on the carousel under the pointer
     @Published var openInDrawer: Bool { didSet { d.set(openInDrawer, forKey: "openInDrawer") } }   // switching to a drawer app opens its drawer
 
     private init() {
@@ -134,16 +142,8 @@ final class Config: ObservableObject {
         func load<T: Decodable>(_ key: String) -> T? {
             d.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) }
         }
-        // Migrate the single-pair settings from earlier versions.
-        pairs = load("pairs") ?? [Pair(mainID: d.string(forKey: "mainBundleID") ?? "com.t3tools.t3code",
-                                       drawerID: d.string(forKey: "drawerBundleID") ?? "com.superlogical.rex",
-                                       size: d.object(forKey: "heightFraction") as? Double ?? 0.5,
-                                       shrinkMain: d.bool(forKey: "shrinkMain"))]
-        var edges: [String: Shortcut] = load("edgeShortcuts") ?? [:]
-        if edges.isEmpty, let old: Shortcut = load("shortcut"), old != .default(for: .bottom) {
-            edges[Edge.bottom.rawValue] = old   // keep a custom single shortcut from earlier versions on the bottom slot
-        }
-        edgeShortcuts = edges
+        pairs = load("pairs") ?? []
+        edgeShortcuts = load("edgeShortcuts") ?? [:]
         carousels = load("carousels") ?? []
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
@@ -236,7 +236,7 @@ func appIcon(_ id: String, size: CGFloat = 16) -> NSImage? {
     return copy
 }
 
-/// Apps in /Applications (and ~/Applications), for picking apps that aren't running.
+/// Apps in /Applications, /System/Applications and ~/Applications, for picking apps that aren't running.
 func installedApps() -> [(id: String, name: String)] {
     let fm = FileManager.default
     let dirs = ["/Applications", "/System/Applications", NSHomeDirectory() + "/Applications"]
@@ -246,5 +246,5 @@ func installedApps() -> [(id: String, name: String)] {
             guard let id = Bundle(path: "\(dir)/\(name)")?.bundleIdentifier, seen.insert(id).inserted else { return nil }
             return (id, String(name.dropLast(4)))
         }
-    }.sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+    }
 }

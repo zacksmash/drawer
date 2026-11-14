@@ -128,6 +128,41 @@ struct DrawersTab: View {
     }
 }
 
+struct DrawerRow: View {
+    let pair: Pair
+    var conflict: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AppIcon(id: pair.drawerID, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appName(pair.drawerID))
+                if let conflict {
+                    Label(conflict, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                } else {
+                    Text(pair.summary).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            KeyCaps(shortcut: pair.effectiveShortcut)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+}
+
+extension Pair {
+    static let sizes: [(value: Double, label: String)] = [(1.0 / 3, "⅓"), (0.5, "½"), (2.0 / 3, "⅔"), (1.0, "Full")]
+    /// The preset this size is, or nil if it was dragged to a custom size.
+    var preset: Double? { Self.sizes.first { abs($0.value - size) < 0.005 }?.value }
+    var sizeLabel: String { Self.sizes.first { $0.value == preset }?.label ?? "Custom" }
+    var summary: String {
+        isFull ? "\(edge.label) · Full" : "\(edge.label) · \(sizeLabel) · \(tiles ? "Tiled" : "Floating")"
+    }
+}
+
 // MARK: Carousels tab
 
 struct CarouselsTab: View {
@@ -209,41 +244,6 @@ struct CarouselsTab: View {
     }
 }
 
-struct DrawerRow: View {
-    let pair: Pair
-    var conflict: String?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            AppIcon(id: pair.drawerID, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(appName(pair.drawerID))
-                if let conflict {
-                    Label(conflict, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout).foregroundStyle(.orange)
-                } else {
-                    Text(pair.summary).font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            HStack(spacing: 3) { ForEach(pair.effectiveShortcut.keys, id: \.self) { KeyCap(text: $0) } }
-            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-    }
-}
-
-extension Pair {
-    static let sizes: [(value: Double, label: String)] = [(1.0 / 3, "⅓"), (0.5, "½"), (2.0 / 3, "⅔"), (1.0, "Full")]
-    /// The preset this size is, or nil if it was dragged to a custom size.
-    var preset: Double? { Self.sizes.first { abs($0.value - size) < 0.005 }?.value }
-    var sizeLabel: String { Self.sizes.first { $0.value == preset }?.label ?? "Custom" }
-    var summary: String {
-        isFull ? "\(edge.label) · Full" : "\(edge.label) · \(sizeLabel) · \(tiles ? "Tiled" : "Floating")"
-    }
-}
-
 // MARK: Drawer editor sheet
 
 struct DrawerEditor: View {
@@ -300,9 +300,7 @@ struct DrawerEditor: View {
                         set: { draft.shortcut = $0 ? nil : Config.shared.shortcut(for: draft.edge) })) {
                         HStack(spacing: 6) {
                             Text("Use the \(draft.edge.label.lowercased()) edge shortcut")
-                            HStack(spacing: 3) {
-                                ForEach(Config.shared.shortcut(for: draft.edge).keys, id: \.self) { KeyCap(text: $0) }
-                            }
+                            KeyCaps(shortcut: Config.shared.shortcut(for: draft.edge))
                         }
                     }
                     if let sc = draft.shortcut {
@@ -611,7 +609,6 @@ struct ShortcutRecorder: View {
             }
             .buttonStyle(.plain)
             .help("Click to record a new shortcut")
-
         }
     }
 
@@ -640,6 +637,14 @@ struct ShortcutRecorder: View {
     }
 }
 
+/// A shortcut as a row of key caps.
+struct KeyCaps: View {
+    let shortcut: Shortcut
+    var body: some View {
+        HStack(spacing: 3) { ForEach(shortcut.keys, id: \.self) { KeyCap(text: $0) } }
+    }
+}
+
 struct KeyCap: View {
     let text: String
     var body: some View {
@@ -648,19 +653,5 @@ struct KeyCap: View {
             .padding(.horizontal, 5)
             .frame(minWidth: 20, minHeight: 18)
             .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary))
-    }
-}
-
-extension Shortcut {
-    /// Individual key caps, e.g. ["fn", "⌃", "D"].
-    var keys: [String] {
-        let f = cgFlags
-        var k: [String] = []
-        if f.contains(.maskSecondaryFn) { k.append("fn") }
-        if f.contains(.maskControl) { k.append("⌃") }
-        if f.contains(.maskAlternate) { k.append("⌥") }
-        if f.contains(.maskShift) { k.append("⇧") }
-        if f.contains(.maskCommand) { k.append("⌘") }
-        return k + [keyName(keyCode)]
     }
 }

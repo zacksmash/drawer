@@ -337,8 +337,6 @@ final class DrawerSession {
     var onPopOut: (() -> Void)?
     var onWindowGone: (() -> Void)?  // its window closed while docked (the app may be opening another)
     var expected: CGRect = .zero     // frame we last put it at
-    /// Its window's close / minimize / zoom buttons, relative to the window's top-left corner.
-    var buttons: [(kind: TrafficLight, rect: CGRect)] = []
     private static let notes = [kAXMovedNotification, kAXUIElementDestroyedNotification]
 
     init(pair: Pair, window: AXUIElement) { (self.pair, self.window) = (pair, window) }
@@ -370,18 +368,6 @@ final class DrawerSession {
         stopWatching()
         window = w
         watchMoves(app: app)
-        learnButtons()
-    }
-
-    /// Where the window's traffic lights are, so clicks on them can be caught.
-    func learnButtons() {
-        guard let origin = axFrame(window)?.origin else { buttons = []; return }
-        buttons = TrafficLight.allCases.compactMap { kind in
-            var v: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(window, kind.attribute as CFString, &v) == .success, let v,
-                  let f = axFrame(v as! AXUIElement), f.width > 0 else { return nil }
-            return (kind, f.offsetBy(dx: -origin.x, dy: -origin.y))
-        }
     }
 
     private func moved() {
@@ -546,11 +532,9 @@ final class Drawer {
     /// Drawer windows the user dragged out, by drawer app, until they close or dock again.
     private var popped: [String: PoppedWindow] = [:]
 
-    /// Traffic lights of open drawers, in screen coordinates.
-    var trafficLights: [(id: UUID, kind: TrafficLight, rect: CGRect)] {
-        stages.values.flatMap { st in st.sessions.filter(\.docked).flatMap { s in
-            s.buttons.map { (s.pair.id, $0.kind, $0.rect.offsetBy(dx: s.expected.minX, dy: s.expected.minY).insetBy(dx: -2, dy: -2)) }
-        } }
+    /// Windows of open drawers, whose traffic lights do Drawer things.
+    var dockedWindows: [(id: UUID, window: AXUIElement)] {
+        stages.values.flatMap { st in st.sessions.filter(\.docked).map { ($0.pair.id, $0.window) } }
     }
 
     /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and
@@ -980,7 +964,6 @@ final class Drawer {
             for o in others { if let b = after.drawers[o.pair.id] { o.expected = b; o.resizer.request(o.window, b) } }
             bringToFront(app, w)   // in case another app grabbed focus mid-slide
             s.docked = true
-            s.learnButtons()
             s.onPopOut = { [weak self, weak st, weak s] in if let st, let s { self?.popOut(st, s) } }
             s.watchMoves(app: app)
             s.onWindowGone = { [weak self, weak st, weak s] in if let st, let s { self?.adoptReplacement(st, s) } }

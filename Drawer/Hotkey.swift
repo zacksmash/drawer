@@ -15,7 +15,6 @@ final class Hotkey {
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
-        var trafficLights: [(id: UUID, kind: TrafficLight, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
         var hoverTarget = true
@@ -68,16 +67,39 @@ final class Hotkey {
         s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs).union(carousels.memberIDs)
         s.lockedFrames = drawer.lockedFrames
         s.resizeHandles = drawer.resizeHandles
-        s.trafficLights = drawer.trafficLights
         s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
         s.carouselFronts = carousels.memberIDs
         s.hoverTarget = Config.shared.hoverTarget
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
+        refreshLights()
     }
 
     private func current() -> Snapshot { lock.lock(); defer { lock.unlock() }; return snap }
+
+    // Traffic lights of open drawers, read live off the main thread (the app may be slow to answer) so a
+    // click on them can be caught right where they are, whatever size the app ended up.
+    private var lights: [(id: UUID, kind: TrafficLight, rect: CGRect)] = []   // under `lock`
+    private let lightQueue = DispatchQueue(label: "Drawer traffic lights", qos: .userInitiated)
+    private var lightsPending = false   // main thread
+
+    private func refreshLights() {
+        guard !lightsPending else { return }
+        let windows = drawer.dockedWindows
+        if windows.isEmpty { lock.lock(); lights = []; lock.unlock(); return }
+        lightsPending = true
+        lightQueue.async { [weak self] in
+            let found = windows.flatMap { w in TrafficLight.find(in: w.window).map { (w.id, $0.kind, $0.rect) } }
+            guard let self else { return }
+            self.lock.lock(); self.lights = found; self.lock.unlock()
+            DispatchQueue.main.async { self.lightsPending = false }
+        }
+    }
+
+    private func currentLights() -> [(id: UUID, kind: TrafficLight, rect: CGRect)] {
+        lock.lock(); defer { lock.unlock() }; return lights
+    }
 
     // MARK: Tap (own thread)
 
@@ -142,7 +164,7 @@ final class Hotkey {
         case .leftMouseDown:
             let p = event.location   // global top-left coords, same as Accessibility
             // A drawer's traffic lights do Drawer things (⌥-click for the usual). Acts on release, like a button.
-            if !event.flags.contains(.maskAlternate), let l = s.trafficLights.first(where: { $0.rect.contains(p) }) {
+            if !event.flags.contains(.maskAlternate), let l = currentLights().first(where: { $0.rect.contains(p) }) {
                 pressedLight = l
                 return true
             }

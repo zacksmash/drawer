@@ -37,6 +37,17 @@ enum TrafficLight: CaseIterable {
         case .zoom: kAXZoomButtonAttribute
         }
     }
+
+    /// Where `window`'s traffic lights are right now (screen coordinates, a little padding). Any thread.
+    static func find(in window: AXUIElement) -> [(kind: TrafficLight, rect: CGRect)] {
+        AXUIElementSetMessagingTimeout(window, 0.1)
+        return allCases.compactMap { kind in
+            var v: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, kind.attribute as CFString, &v) == .success, let v,
+                  CFGetTypeID(v) == AXUIElementGetTypeID(), let f = axFrame(v as! AXUIElement), f.width > 0 else { return nil }
+            return (kind, f.insetBy(dx: -2, dy: -2))
+        }
+    }
 }
 
 /// Apps that take turns in one spot: the main app's window. fn⌃. / fn⌃, cycle through them.

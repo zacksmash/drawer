@@ -118,10 +118,6 @@ final class CarouselController {
         guard let app, let w = axWindow(app), let back = running(to), let bw = axWindow(back) else {
             bringIn(to, frame: frame, from: edge, animated: false, done: done); return
         }
-        if back.isHidden {
-            setFrame(bw, frame)   // while still hidden
-            back.unhide()
-        }
         retreat(w, app: app, to: entryFrame(frame, from: edge), home: frame, revealing: back) { done(true) }
     }
 
@@ -129,8 +125,11 @@ final class CarouselController {
     private func retreat(_ w: AXUIElement, app: NSRunningApplication, to: CGRect, home: CGRect,
                          revealing back: NSRunningApplication?, done: @escaping () -> Void) {
         if let back, let bw = axWindow(back) {
-            if back.isHidden { setFrame(bw, home); back.unhide() }   // hidden as the peeked app came in
+            // Hidden as the peeked app came in: put it in place while still hidden, then activate it, which
+            // unhides it already in front (a plain unhide shows it behind the peeked app for a frame).
+            if back.isHidden { setFrame(bw, home) }
             bringToFront(back, bw)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { if back.isHidden { back.unhide() } }   // just in case
         }
         hideOnceBehind(app) { setFrame(w, home) }   // in place for next time
         done()
@@ -218,14 +217,14 @@ final class CarouselController {
             // front makes macOS bring forward some other app first, which flashes on screen.
             var shown = willShow
             let reveal = { if let f = shown, app.isActive { shown = nil; f() } }
-            self.animator.run(duration: 0.3, curve: glide, step: { e in
+            self.animator.run(duration: 0.26, curve: glide, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
                 reveal()
             }) {
                 if let f = shown { shown = nil; f() }   // didn't come to the front in time; hide it anyway
                 self.sliding = nil
-                setFrame(w, frame)
-                bringToFront(app, w)
+                if let f = axFrame(w), f != frame { setFrame(w, frame) }   // the last step put it there already
+                if !app.isActive { bringToFront(app, w) }   // re-activating would re-raise it: a visible hitch
                 done(true)
             }
         }

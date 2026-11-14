@@ -81,6 +81,7 @@ Change them under **General → Keyboard**, or give a single drawer its own shor
 - **Resize**: drag the drawer's inner edge (the one facing the main window). The new size is saved. **Double-click** that edge to go back to the previous size.
 - **Traffic lights** on an open drawer do drawer things. <kbd>⌥</kbd>-click for the usual behaviour.
   - 🔴 slides the drawer away. The app keeps its window and state.
+    For apps like TablePlus, where closing a window takes you back to a picker, turn on **Red button closes the window** for that drawer.
   - 🟡 lets it out as a normal window, with a little *pop*. The shortcut docks it again.
   - 🟢 switches between its size and Full.
 - **Drag a drawer out** by its title bar to use it as a normal window. Close it and it goes back to its drawer spot next time.

@@ -314,6 +314,13 @@ struct DrawerEditor: View {
                     Text("Each edge has its own shortcut, set in General.")
                         .foregroundStyle(.secondary)
                 }
+                Section {
+                    Toggle(isOn: Binding(get: { draft.redClosesWindow == true },
+                                         set: { draft.redClosesWindow = $0 ? true : nil })) {
+                        Text("Red button closes the window")
+                        Text("Off: the red button slides the drawer away and the app keeps its window. On: it closes the window as usual, for apps like TablePlus where that goes back to a picker. The drawer closes if no window is left.")
+                    }
+                }
             }
             .formStyle(.grouped)
             .pickerStyle(.segmented)

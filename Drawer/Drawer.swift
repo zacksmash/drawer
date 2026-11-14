@@ -555,7 +555,17 @@ final class Drawer {
     func trafficLight(_ kind: TrafficLight, of id: UUID) {
         guard let (st, s) = session(id), s.docked else { return }
         switch kind {
-        case .close: close(id)
+        case .close:
+            // Close the window for real (e.g. TablePlus: database → connection list). The drawer adopts
+            // whatever window comes next, or closes if none does.
+            var b: CFTypeRef?
+            if s.pair.redClosesWindow == true,
+               AXUIElementCopyAttributeValue(s.window, kind.attribute as CFString, &b) == .success, let b,
+               CFGetTypeID(b) == AXUIElementGetTypeID() {
+                AXUIElementPerformAction(b as! AXUIElement, kAXPressAction as CFString)
+            } else {
+                close(id)
+            }
         case .minimize:
             // Let it out with a pop and a little diagonal hop toward the middle of the screen (where there's room).
             NSSound(named: "Pop")?.play()

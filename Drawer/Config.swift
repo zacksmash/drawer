@@ -24,6 +24,7 @@ struct Pair: Codable, Identifiable, Equatable {
     var shrinkMain: Bool = false    // tile next to the main window instead of overlaying it
     var shortcut: Shortcut?         // nil = use the edge's shortcut
     var previousSize: Double?       // size before the last edge drag (double-clicking the edge goes back)
+    var redClosesWindow: Bool?      // the red button closes the window as usual, instead of sliding the drawer away
 
     var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut(for: edge) }
 

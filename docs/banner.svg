@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 440" width="1280" height="440">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2c38"/>
+      <stop offset="1" stop-color="#121219"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9440"/>
+      <stop offset="1" stop-color="#f2545c"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ab0ff"/>
+      <stop offset="1" stop-color="#4e6cf5"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b98cff"/>
+      <stop offset="1" stop-color="#7a5af5"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.4" fill="#ffffff" opacity="0.06"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="440" rx="28" fill="url(#bg)"/>
+  <rect width="1280" height="440" rx="28" fill="url(#dots)"/>
+
+  <!-- Screen: main window with drawers on three edges -->
+  <g transform="translate(70 50)">
+    <!-- left drawer, peeking in -->
+    <g filter="url(#shadow)">
+      <rect x="0" y="40" width="120" height="260" rx="16" fill="url(#blue)"/>
+      <rect x="96" y="150" width="6" height="40" rx="3" fill="#fff" opacity="0.8"/>
+      <rect x="18" y="66" width="70" height="10" rx="5" fill="#fff" opacity="0.55"/>
+      <rect x="18" y="88" width="52" height="10" rx="5" fill="#fff" opacity="0.4"/>
+      <rect x="18" y="110" width="62" height="10" rx="5" fill="#fff" opacity="0.4"/>
+    </g>
+
+    <!-- main window -->
+    <g filter="url(#shadow)">
+      <rect x="132" y="0" width="420" height="230" rx="18" fill="#eeeeee"/>
+      <circle cx="156" cy="22" r="6" fill="#ff5f57"/>
+      <circle cx="176" cy="22" r="6" fill="#febc2e"/>
+      <circle cx="196" cy="22" r="6" fill="#28c840"/>
+      <rect x="160" y="54" width="230" height="16" rx="8" fill="#d2d2d2"/>
+      <rect x="160" y="86" width="180" height="16" rx="8" fill="#d2d2d2"/>
+      <rect x="160" y="118" width="260" height="16" rx="8" fill="#d2d2d2"/>
+      <rect x="160" y="150" width="140" height="16" rx="8" fill="#d2d2d2"/>
+    </g>
+
+    <!-- bottom drawer sliding up -->
+    <g filter="url(#shadow)">
+      <rect x="132" y="242" width="420" height="98" rx="18" fill="url(#orange)"/>
+      <rect x="312" y="252" width="60" height="7" rx="3.5" fill="#fff" opacity="0.85"/>
+      <path d="M160 280 l22 16 l-22 16" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M198 312 h40" stroke="#fff" stroke-width="9" stroke-linecap="round"/>
+    </g>
+    <!-- motion lines -->
+    <g stroke="#ff9440" stroke-width="4" stroke-linecap="round" opacity="0.7">
+      <path d="M250 356 v14"/><path d="M342 356 v22"/><path d="M434 356 v14"/>
+    </g>
+
+    <!-- right drawer -->
+    <g filter="url(#shadow)">
+      <rect x="564" y="40" width="120" height="260" rx="16" fill="url(#violet)"/>
+      <rect x="582" y="150" width="6" height="40" rx="3" fill="#fff" opacity="0.8"/>
+      <rect x="600" y="66" width="66" height="10" rx="5" fill="#fff" opacity="0.55"/>
+      <rect x="600" y="88" width="48" height="10" rx="5" fill="#fff" opacity="0.4"/>
+    </g>
+  </g>
+
+  <!-- Title -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif">
+    <text x="820" y="190" font-size="92" font-weight="800" fill="#ffffff" letter-spacing="-2">Drawer</text>
+    <text x="824" y="240" font-size="26" font-weight="500" fill="#c9cad6">Slide any app out of the edge</text>
+    <text x="824" y="274" font-size="26" font-weight="500" fill="#c9cad6">of the one you're working in.</text>
+    <g transform="translate(824 312)" font-size="20" font-weight="600">
+      <rect width="66" height="38" rx="9" fill="#ffffff" opacity="0.1"/>
+      <text x="33" y="26" text-anchor="middle" fill="#ffffff">fn⌃,</text>
+      <rect x="78" width="66" height="38" rx="9" fill="#ffffff" opacity="0.1"/>
+      <text x="111" y="26" text-anchor="middle" fill="#ffffff">fn⌃D</text>
+      <rect x="156" width="66" height="38" rx="9" fill="#ffffff" opacity="0.1"/>
+      <text x="189" y="26" text-anchor="middle" fill="#ffffff">fn⌃.</text>
+    </g>
+  </g>
+</svg>

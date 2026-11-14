@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" width="1280" height="360">
+  <defs>
+    <linearGradient id="orange" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9440"/>
+      <stop offset="1" stop-color="#f2545c"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ab0ff"/>
+      <stop offset="1" stop-color="#4e6cf5"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b98cff"/>
+      <stop offset="1" stop-color="#7a5af5"/>
+    </linearGradient>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="360" rx="24" fill="#16171f"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" text-anchor="middle">
+    <!-- Overlay -->
+    <g transform="translate(60 50)">
+      <rect width="340" height="200" rx="14" fill="#eeeeee" filter="url(#s)"/>
+      <rect x="22" y="24" width="180" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="22" y="48" width="140" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="22" y="72" width="200" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="10" y="110" width="320" height="80" rx="12" fill="url(#orange)" filter="url(#s)"/>
+      <rect x="140" y="118" width="60" height="6" rx="3" fill="#fff" opacity="0.85"/>
+      <text x="170" y="270" font-size="24" font-weight="700" fill="#fff">Overlay</text>
+      <text x="170" y="298" font-size="17" fill="#9a9bab">slides over the main window</text>
+    </g>
+
+    <!-- Make room -->
+    <g transform="translate(470 50)">
+      <rect width="200" height="200" rx="14" fill="#eeeeee" filter="url(#s)"/>
+      <rect x="20" y="24" width="120" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="20" y="48" width="90" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="20" y="72" width="140" height="12" rx="6" fill="#d2d2d2"/>
+      <rect x="210" y="0" width="130" height="200" rx="14" fill="url(#violet)" filter="url(#s)"/>
+      <rect x="220" y="80" width="6" height="40" rx="3" fill="#fff" opacity="0.85"/>
+      <path d="M150 170 h-30 m8 -8 l-8 8 l8 8" fill="none" stroke="#7a5af5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="170" y="270" font-size="24" font-weight="700" fill="#fff">Make room</text>
+      <text x="170" y="298" font-size="17" fill="#9a9bab">tiles beside it, main window shrinks</text>
+    </g>
+
+    <!-- Carousel -->
+    <g transform="translate(880 50)">
+      <rect x="40" y="-20" width="260" height="200" rx="12" fill="#34364a"/>
+      <rect x="20" y="-10" width="300" height="200" rx="13" fill="#4c4f68"/>
+      <rect x="0" y="0" width="340" height="200" rx="14" fill="url(#blue)" filter="url(#s)"/>
+      <rect x="22" y="24" width="160" height="12" rx="6" fill="#fff" opacity="0.55"/>
+      <rect x="22" y="48" width="120" height="12" rx="6" fill="#fff" opacity="0.4"/>
+      <g stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <path d="M120 140 l-16 16 l16 16"/>
+        <path d="M220 140 l16 16 l-16 16"/>
+      </g>
+      <text x="170" y="270" font-size="24" font-weight="700" fill="#fff">Carousel</text>
+      <text x="170" y="298" font-size="17" fill="#9a9bab">apps take turns in one spot</text>
+    </g>
+  </g>
+</svg>

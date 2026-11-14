@@ -16,6 +16,7 @@ final class Hotkey {
         var lockedFrames: [CGRect] = []
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
+        var floatingDrawers: [String: Set<String>] = [:]     // main app → apps of its open overlay drawers
         var shortcuts: [Shortcut] = []
         var hoverTarget = true
         var carouselFronts: Set<String> = []   // apps in a carousel (fn + swipe cycles them)
@@ -68,6 +69,7 @@ final class Hotkey {
         s.lockedFrames = drawer.lockedFrames
         s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
+        s.floatingDrawers = drawer.floatingDrawers
         s.shortcuts = Config.shared.allShortcuts
         s.carouselFronts = carousels.memberIDs
         s.hoverTarget = Config.shared.hoverTarget
@@ -189,6 +191,15 @@ final class Hotkey {
             if !blockingDrag, !s.lockedFrames.contains(where: { $0.contains(p) }),   // not on a drawer itself
                let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
                 let from = s.front
+                // Coming back from another app to a main window with overlay drawers: take the click, and bring
+                // the drawers back on top with the main window just behind them. Letting the click through
+                // would raise the main window over them for a moment first.
+                if let floating = s.floatingDrawers[hit.id], !floating.isEmpty, from != hit.id,
+                   !floating.contains(from ?? "") {
+                    blockingDrag = true   // swallow the rest of this click too
+                    DispatchQueue.main.async { drawer.comeBack(hit.id); self.refresh() }
+                    return true
+                }
                 DispatchQueue.main.async { drawer.mainPressed(hit.id, from: from) }
             }
             return blockingDrag

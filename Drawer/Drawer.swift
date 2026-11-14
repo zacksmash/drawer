@@ -810,6 +810,31 @@ final class Drawer {
         return pair.id
     }
 
+    /// Main app → apps of its open overlay (floating) drawers.
+    var floatingDrawers: [String: Set<String>] {
+        stages.mapValues { st in Set(st.sessions.filter { $0.docked && !$0.pair.tiles }.map(\.pair.drawerID)) }
+    }
+
+    /// The user clicked `mainID`'s window from another app while it has overlay drawers open: bring the
+    /// drawers to the front, then raise the main window without activating it. A raised background window goes
+    /// just behind the app in front, so it lands right under its drawers and never comes up over them.
+    func comeBack(_ mainID: String) {
+        guard let st = stages[mainID] else { return }
+        let floating = st.sessions.filter { $0.docked && !$0.pair.tiles }
+        var front: NSRunningApplication?
+        for s in floating { if let app = running(s.pair.drawerID) { bringToFront(app, s.window); front = app } }
+        guard let mw = st.mainWindow, let front else { return }
+        let started = CACurrentMediaTime()
+        let t = Timer(timeInterval: 0.008, repeats: true) { t in
+            guard front.isActive || CACurrentMediaTime() - started > 0.4 else { return }
+            t.invalidate()
+            AXUIElementPerformAction(mw, kAXRaiseAction as CFString)
+            for s in floating.dropLast() { AXUIElementPerformAction(s.window, kAXRaiseAction as CFString) }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        t.fire()
+    }
+
     /// When the event tap last saw a press on each main window, and whether it brings the drawers back.
     private var lastMainPress: [String: (at: CFTimeInterval, restore: Bool)] = [:]
 

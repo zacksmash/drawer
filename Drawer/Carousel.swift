@@ -1,7 +1,7 @@
 import AppKit
 
-/// Carousels: apps that take turns in the main app's spot. fn⌃. slides the next one in from the right,
-/// fn⌃, the previous one from the left, wrapping around. The spot is wherever the app showing now is
+/// Carousels: apps that take turns in the main app's spot. The right-edge shortcut (fn⌃. by default) slides
+/// the next one in from the right, the left-edge one (fn⌃,) the previous one from the left, wrapping around. The spot is wherever the app showing now is
 /// (so moving or resizing it carries the whole carousel along); the one being replaced hides once covered.
 final class CarouselController {
     private var busy: Set<UUID> = []
@@ -10,7 +10,7 @@ final class CarouselController {
     private var last: (carousel: UUID, from: String, to: String, forward: Bool)?
     private var returnWanted = false
     /// The slide in progress, so a peek let go mid-way can turn straight back from where it is.
-    private var sliding: (carousel: UUID, window: AXUIElement, app: NSRunningApplication, from: CGRect, to: CGRect)?
+    private var sliding: (carousel: UUID, window: AXUIElement, app: NSRunningApplication, to: CGRect)?
 
     /// Whether `shortcut` cycles a carousel while `front` is in front.
     func handles(front: String?, shortcut: Shortcut) -> Bool {
@@ -20,13 +20,12 @@ final class CarouselController {
 
     var memberIDs: Set<String> { Set(Config.shared.carousels.filter { $0.members.count > 1 }.flatMap(\.members)) }
 
-    /// `held`: from a key press, which may turn into a peek.
-    func cycle(front: String?, shortcut: Shortcut, held: Bool = false) {
-        cycle(front: front, forward: shortcut == Config.shared.shortcut(for: .right), held: held)
+    func cycle(front: String?, shortcut: Shortcut) {
+        cycle(front: front, forward: shortcut == Config.shared.shortcut(for: .right))
     }
 
     /// Forward = the next app, coming in from the right.
-    func cycle(front: String?, forward: Bool, held: Bool = false) {
+    func cycle(front: String?, forward: Bool) {
         guard AXIsProcessTrusted() else { drawer.promptAccessibility(); return }
         guard let front, let c = Config.shared.carousel(containing: front), !busy.contains(c.id),
               let cur = c.members.firstIndex(of: front) else { return }
@@ -39,11 +38,6 @@ final class CarouselController {
         last = (c.id, front, members[next], forward)
         returnWanted = false
         swap(c.id, from: curApp, to: members[next], frame: frame, edge: forward ? .right : .left)
-    }
-
-    /// The cycling shortcut came up: a peek goes back; a tap keeps the new app.
-    func keyReleased(peek: Bool) {
-        if peek { endPeek() }
     }
 
     /// The user switched to `app` itself (Dock, ⌘-Tab…). If it's in a carousel and another member is
@@ -79,7 +73,7 @@ final class CarouselController {
                 animator.stop()
                 sliding = nil
                 last = nil
-                retreat(s.window, app: s.app, to: s.from, home: s.to, revealing: running(l.from)) { [weak self] in
+                retreat(s.window, app: s.app, home: s.to, revealing: running(l.from)) { [weak self] in
                     self?.busy.remove(l.carousel)
                 }
             } else {
@@ -91,12 +85,11 @@ final class CarouselController {
         let cur = running(l.to)
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == l.to,
               let frame = cur.flatMap(axWindow).flatMap(axFrame) else { return }
-        // Play the same animation backwards: the peeked app backs out the way it came.
         swap(l.carousel, from: cur, to: l.from, frame: frame, edge: l.forward ? .right : .left, reversed: true)
     }
 
-    /// Slide `to` in over `from` at `frame`, then hide `from`. `edge`: the side the incoming app enters
-    /// from — or, `reversed`, the side `from` backs out to.
+    /// Slide `to` in over `from` at `frame`, then hide `from`. `edge`: the side the incoming app enters from.
+    /// `reversed`: undo a peek instead (see backOut).
     private func swap(_ cid: UUID, from: NSRunningApplication?, to: String, frame: CGRect, edge: Edge,
                       reversed: Bool = false) {
         busy.insert(cid)
@@ -112,17 +105,17 @@ final class CarouselController {
         else { bringIn(to, frame: frame, from: edge, carousel: cid, willShow: { from?.hide() }, done: finish) }
     }
 
-    /// Peek let go: `to` comes back in the spot and `app` simply disappears (no animation).
+    /// Peek let go: put `to` back in front at `frame` (bringing it in afresh if a window is missing).
     private func backOut(_ app: NSRunningApplication?, to: String, frame: CGRect, toward edge: Edge,
                          done: @escaping (Bool) -> Void) {
         guard let app, let w = axWindow(app), let back = running(to), axWindow(back) != nil else {
             bringIn(to, frame: frame, from: edge, animated: false, done: done); return
         }
-        retreat(w, app: app, to: entryFrame(frame, from: edge), home: frame, revealing: back) { done(true) }
+        retreat(w, app: app, home: frame, revealing: back) { done(true) }
     }
 
     /// Peek let go: hide the peeked app on the spot (no animation), leaving `back` in front.
-    private func retreat(_ w: AXUIElement, app: NSRunningApplication, to: CGRect, home: CGRect,
+    private func retreat(_ w: AXUIElement, app: NSRunningApplication, home: CGRect,
                          revealing back: NSRunningApplication?, done: @escaping () -> Void) {
         if let back, let bw = axWindow(back) {
             // Hidden as the peeked app came in: put it in place while still hidden, then activate it, which
@@ -212,7 +205,7 @@ final class CarouselController {
             setSize(w, frame.size)
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
-            if let carousel { self.sliding = (carousel, w, app, start, frame) }
+            if let carousel { self.sliding = (carousel, w, app, frame) }
             // Hide the current app (willShow) only once this one is actually in front: hiding the app in
             // front makes macOS bring forward some other app first, which flashes on screen.
             var shown = willShow

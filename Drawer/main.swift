@@ -1,9 +1,9 @@
 // Drawer — slides a "drawer" app's window over (or beside) a "main" app's window on a global shortcut.
 // Each main app gets its own drawer (e.g. T3 Code → Rex, VS Code → Notes); the shortcut acts on
-// whichever main app is in front. Configure from the menu bar icon → Settings…
+// whichever main app is in front. Carousels cycle several apps through one spot (fn⌃, / fn⌃.).
+// Configure from the menu bar icon → Settings…
 
 import AppKit
-import ServiceManagement
 
 // Helper mode for Hotkey's watchdog: report whether Accessibility is allowed right now, then exit.
 if CommandLine.arguments.contains("--trust-check") { exit(AXIsProcessTrusted() ? 0 : 1) }

@@ -63,17 +63,17 @@ final class Hotkey {
         RunLoop.main.add(t, forMode: .common)
     }
 
-    func refresh() {
+    private func refresh() {
         var s = Snapshot()
         s.front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs).union(carousels.memberIDs)
+        s.stageApps = drawer.openAppIDs
+        s.carouselFronts = carousels.memberIDs
+        s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(s.stageApps).union(s.carouselFronts)
         s.lockedFrames = drawer.lockedFrames
         s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
         s.floatingDrawers = drawer.floatingDrawers
-        s.stageApps = drawer.openAppIDs
         s.shortcuts = Config.shared.allShortcuts
-        s.carouselFronts = carousels.memberIDs
         s.hoverTarget = Config.shared.hoverTarget
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
@@ -246,7 +246,7 @@ final class Hotkey {
             let peeked = s.peek && CACurrentMediaTime() - start > peekThreshold   // held → it was a peek
             DispatchQueue.main.async {
                 if peeked, let id = self.openedByPress { drawer.close(id) }
-                if self.cycledByPress { carousels.keyReleased(peek: peeked) }
+                if peeked && self.cycledByPress { carousels.endPeek() }
                 self.openedByPress = nil
                 self.cycledByPress = false
             }
@@ -264,7 +264,7 @@ final class Hotkey {
         pressedKey = key
         DispatchQueue.main.async {
             if let c = [hovered, front].compactMap({ $0 }).first(where: { carousels.handles(front: $0, shortcut: shortcut) }) {
-                carousels.cycle(front: c, shortcut: shortcut, held: true)   // ‹ / › in a carousel app
+                carousels.cycle(front: c, shortcut: shortcut)   // ‹ / › in a carousel app
                 self.openedByPress = nil
                 self.cycledByPress = true
             } else {
@@ -288,13 +288,6 @@ final class Hotkey {
         event.flags.intersection(Shortcut.modifierMask) == .maskSecondaryFn
     }
 
-    private func cycle(_ front: String, forward: Bool) {
-        DispatchQueue.main.async {
-            carousels.cycle(front: front, forward: forward)
-            self.refresh()
-        }
-    }
-
     /// fn + a sideways scroll (two fingers on a trackpad, one on a Magic Mouse) cycles once per gesture.
     /// Fingers moving left bring in the next app from the right.
     private func swipe(_ event: CGEvent, _ s: Snapshot) -> Bool {
@@ -316,11 +309,11 @@ final class Hotkey {
         swipeX += e.isDirectionInvertedFromDevice ? dx : -dx   // > 0: fingers moving right
         if abs(swipeX) > 18 {
             swipeFired = true
-            cycle(front, forward: swipeX < 0)
+            let forward = swipeX < 0
+            DispatchQueue.main.async { carousels.cycle(front: front, forward: forward); self.refresh() }
         }
         return true
     }
-
 }
 
 /// Whether Drawer is allowed Accessibility *right now*. Runs Drawer's own binary with --trust-check:

@@ -15,6 +15,7 @@ for s in 16 32 128 256 512; do
   sips -z $((s*2)) $((s*2)) build/icon.png --out build/Drawer.iconset/icon_${s}x${s}@2x.png >/dev/null
 done
 iconutil -c icns build/Drawer.iconset -o "$APP/Contents/Resources/Drawer.icns"
+rm -rf build/Drawer.iconset build/icon.png
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

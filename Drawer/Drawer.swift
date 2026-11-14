@@ -538,15 +538,31 @@ final class Drawer {
     }
 
     /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and
-    /// state), yellow lets it out as an ordinary window where it is, green switches between its size and Full.
+    /// state), yellow lets it out as an ordinary window (nudged off its edge), green switches between its
+    /// size and Full.
     func trafficLight(_ kind: TrafficLight, of id: UUID) {
         guard let (st, s) = session(id), s.docked else { return }
         switch kind {
         case .close: close(id)
-        case .minimize: popOut(st, s)
+        case .minimize:
+            // Let it out, and nudge it in from its edge so it visibly comes loose.
+            guard let start = axFrame(s.window) else { popOut(st, s); return }
+            let d: CGFloat = 40
+            let end = switch s.pair.edge {
+            case .bottom: start.offsetBy(dx: 0, dy: -d)
+            case .left: start.offsetBy(dx: d, dy: 0)
+            case .right: start.offsetBy(dx: -d, dy: 0)
+            }
+            let w = s.window
+            popOut(st, s)
+            nudger.run(duration: 0.25, curve: glide, step: { e in setPos(w, lerp(start, end, e).origin) }) {
+                setPos(w, end.origin)
+            }
         case .zoom: toggleFull(id)
         }
     }
+
+    private let nudger = Animator()
 
     /// Full size and back to the size it had before.
     func toggleFull(_ id: UUID) {

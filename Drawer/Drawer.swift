@@ -50,6 +50,13 @@ func largestWindow(of app: NSRunningApplication) -> CGRect? {
         .max { $0.width * $0.height < $1.width * $1.height }
 }
 
+/// The screen holding most of `r` (Accessibility coordinates).
+func screenFrame(containing r: CGRect) -> CGRect {
+    let primaryH = NSScreen.screens[0].frame.height
+    let frames = NSScreen.screens.map { sf in CGRect(x: sf.frame.minX, y: primaryH - sf.frame.maxY, width: sf.frame.width, height: sf.frame.height) }
+    return frames.max { $0.intersection(r).width * $0.intersection(r).height < $1.intersection(r).width * $1.intersection(r).height } ?? frames[0]
+}
+
 /// Bring an app and its window to the front. `NSRunningApplication.activate()` from a background
 /// app is often ignored on macOS 14+, so set the app frontmost through Accessibility instead.
 /// When Drawer last brought an app forward itself, so it can tell those activations from the user's.
@@ -538,21 +545,18 @@ final class Drawer {
     }
 
     /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and
-    /// state), yellow lets it out as an ordinary window (nudged off its edge), green switches between its
+    /// state), yellow lets it out as an ordinary window (with a pop, nudged down and inward), green switches between its
     /// size and Full.
     func trafficLight(_ kind: TrafficLight, of id: UUID) {
         guard let (st, s) = session(id), s.docked else { return }
         switch kind {
         case .close: close(id)
         case .minimize:
-            // Let it out, and nudge it in from its edge so it visibly comes loose.
+            // Let it out with a pop, nudged down and in from the nearer side so it visibly comes loose.
+            NSSound(named: "Pop")?.play()
             guard let start = axFrame(s.window) else { popOut(st, s); return }
-            let d: CGFloat = 40
-            let end = switch s.pair.edge {
-            case .bottom: start.offsetBy(dx: 0, dy: -d)
-            case .left: start.offsetBy(dx: d, dy: 0)
-            case .right: start.offsetBy(dx: -d, dy: 0)
-            }
+            let screenMid = screenFrame(containing: start).midX
+            let end = start.offsetBy(dx: start.midX < screenMid ? 40 : -40, dy: 40)
             let w = s.window
             popOut(st, s)
             nudger.run(duration: 0.25, curve: glide, step: { e in setPos(w, lerp(start, end, e).origin) }) {

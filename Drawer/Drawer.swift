@@ -446,7 +446,6 @@ final class Stage {
     var expectedMain: CGRect?        // main frame we last set; anything else means the user moved/re-tiled it
     var quietUntil: CFTimeInterval = 0
     var relayoutTimer: Timer?
-    var closingAfterDrag = false
     private var observer: AXObserver?
     var onMainChanged: (() -> Void)?
 
@@ -853,11 +852,8 @@ final class Drawer {
            near(now.width, expected.width), near(now.height, expected.height) { return }   // our own change
 
         if near(now.width, expected.width), near(now.height, expected.height) {
-            // Moved, not resized: close its drawers rather than drag them along.
-            let (dx, dy) = (now.minX - expected.minX, now.minY - expected.minY)
-            st.expectedMain = now
-            st.area = st.area.offsetBy(dx: dx, dy: dy)
-            closeAfterDrag(st)
+            // Moved, not resized: drop its drawers on the spot rather than drag them along.
+            dropAll(st, mainAt: now)
         } else {
             st.relayoutTimer?.invalidate()
             let t = Timer(timeInterval: 0.15, repeats: false) { [weak self, weak st] _ in if let st { self?.relayout(st) } }
@@ -866,24 +862,22 @@ final class Drawer {
         }
     }
 
-    /// Close every drawer of `st` once the mouse is released (closing tiled ones mid-drag would resize the
-    /// main window under the pointer).
-    private func closeAfterDrag(_ st: Stage) {
-        guard !st.closingAfterDrag else { return }
-        st.closingAfterDrag = true
-        let t = Timer(timeInterval: 0.03, repeats: true) { [weak self, weak st] t in
-            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
-            t.invalidate()
-            guard let self, let st, self.stages[st.mainID] === st else { return }
-            st.closingAfterDrag = false
-            if let mw = st.mainWindow, let now = axFrame(mw), let expected = st.expectedMain, now.size == expected.size {
-                st.area = st.area.offsetBy(dx: now.minX - expected.minX, dy: now.minY - expected.minY)
-                st.expectedMain = now   // where the drag actually ended
-            }
-            for s in st.sessions { self.close(s.pair.id, raise: false) }
+    /// Hide every drawer of `st` at once (no animation) and give the main window back its full size,
+    /// keeping it where it is now (it may still be under the pointer mid-drag).
+    private func dropAll(_ st: Stage, mainAt now: CGRect) {
+        st.animator.stop()
+        st.relayoutTimer?.invalidate()
+        for s in st.sessions {
+            s.docked = false
+            s.stopWatching()
+            running(s.pair.drawerID)?.hide()
         }
-        RunLoop.main.add(t, forMode: .common)
-        t.fire()
+        let wasTiled = st.tiled
+        st.sessions = []
+        if wasTiled, let mw = st.mainWindow { setSize(mw, st.area.size) }
+        st.stopWatching()
+        stages[st.mainID] = nil
+        OpenState.clear(st.mainID)
     }
 
     /// The main window got a new size (e.g. re-tiled): treat it as the new full area and fit the drawers to it.

@@ -919,6 +919,7 @@ final class Drawer {
         var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?
         var spaceMove: (window: AXUIElement, at: CFTimeInterval, restored: Bool)?
+        var spaceOrigin: CGRect?   // where that window was, to put it back if it can't be brought over
 
         if running(pair.drawerID) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pair.drawerID) else { return }
@@ -946,6 +947,19 @@ final class Drawer {
             // A window wherever it last was (popped out, moved, or reopened) would flash there before jumping
             // to the drawer spot. So the app stays hidden until its window is parked off-screen, then unhides.
             if !parked {
+                // Running with no window open: the reopen below makes the app show its window again, but some
+                // apps (TablePlus) re-show the one they closed, still tied to the desktop it was on. macOS only
+                // lists an app's windows on this desktop, but our handle to that one still works: bring it over
+                // (see below).
+                if reopened, elapsed > 0.8, axWindow(app) == nil, let last = self.lastWindows[pair.drawerID],
+                   axFrame(last) != nil {
+                    spaceOrigin = self.openFrame(pair)   // if it can't come over, at least it's in view over there
+                    if app.isHidden { app.unhide() }   // unhiding without activating stays on this desktop
+                    if !isMinimized(last) { setMinimized(last, true) }
+                    spaceMove = (last, CACurrentMediaTime(), false)
+                    parked = true
+                    return
+                }
                 guard let w = axWindow(app) else {
                     // Running but no window (common after closing it, and for Transmit/TablePlus):
                     // a "reopen" asks for its default window, hidden so it can't flash.
@@ -990,7 +1004,11 @@ final class Drawer {
                     return
                 }
                 if !onCurrentSpace(app, window: m.window) {
-                    if now - m.at > 2 { t.invalidate(); self.pending[pair.id] = nil; self.warnOtherSpace(pair.drawerID) }
+                    if now - m.at > 2 {
+                        t.invalidate(); self.pending[pair.id] = nil
+                        if let o = spaceOrigin { setFrame(m.window, o) }   // not left parked off-screen over there
+                        self.warnOtherSpace(pair.drawerID)
+                    }
                     return
                 }
                 t.invalidate()
@@ -1007,6 +1025,7 @@ final class Drawer {
                 if windowSeenAt == nil { windowSeenAt = CACurrentMediaTime() }
                 if CACurrentMediaTime() - windowSeenAt! < 0.3 { return }
                 spaceMove = (w, CACurrentMediaTime(), false)
+                if spaceOrigin == nil { spaceOrigin = axFrame(w).flatMap { screenFrame(containing: $0).intersects($0) ? $0 : nil } ?? self.openFrame(pair) }
                 setMinimized(w, true)
                 return
             }

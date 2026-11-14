@@ -193,6 +193,7 @@ final class CarouselController {
                     return
                 }
                 if !app.isHidden { app.hide(); return }
+                if isMinimized(w) { setMinimized(w, false); return }   // from the Dock, unseen: no genie
                 setFrame(w, closed)
                 parked = true
                 // Activating it unhides it already in front; a plain unhide can show it behind the current

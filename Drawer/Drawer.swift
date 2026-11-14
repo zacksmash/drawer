@@ -863,6 +863,8 @@ final class Drawer {
                     return
                 }
                 if !app.isHidden { app.hide(); return }
+                // Minimised to the Dock: restore it while the app is hidden, so there's no genie on the way back.
+                if isMinimized(w) { setMinimized(w, false); return }
                 self.park(pair, w)
                 parked = true
                 app.unhide()

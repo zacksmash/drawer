@@ -237,6 +237,9 @@ final class Transition {
         let scale = window.backingScaleFactor
         root.frame = view.bounds
         root.masksToBounds = true
+        // Clip to the window's own rounded corners, so pictures sliding in never show a square corner.
+        root.cornerRadius = cornerRadius(of: image, scale: scale)
+        root.cornerCurve = .continuous
         view.layer?.addSublayer(root)
         configure(outgoing, image, scale)
         // Darkening that follows the window's shape (its rounded corners stay clear).
@@ -249,6 +252,24 @@ final class Transition {
         outgoing.addSublayer(dim)
         root.addSublayer(outgoing)
         window.orderFrontRegardless()
+    }
+
+    /// The window's corner radius, read off its picture: along the top row, the corner is see-through up
+    /// to where the curve meets the edge.
+    private func cornerRadius(of image: CGImage, scale: CGFloat) -> CGFloat {
+        let w = min(image.width, 160), rows = 2
+        var px = [UInt8](repeating: 0, count: w * rows * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: rows, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 10 }
+        // Draw so the image's top rows land in this small context (CG's origin is bottom-left).
+        ctx.draw(image, in: CGRect(x: 0, y: CGFloat(rows - image.height), width: CGFloat(image.width), height: CGFloat(image.height)))
+        var x = 0   // memory row 0 is the image's very top row
+        while x < w, px[x * 4 + 3] < 128 { x += 1 }
+        guard x > 0, x < w else { return 10 }
+        // The top row (half a pixel down) meets the curve at x ≈ r − √r; solve for r, erring a touch larger.
+        let r = Double(x) + Double(x).squareRoot() + 1
+        return CGFloat(r) / scale
     }
 
     private func configure(_ l: CALayer, _ image: CGImage, _ scale: CGFloat) {

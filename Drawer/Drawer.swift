@@ -96,6 +96,11 @@ func onCurrentSpace(_ app: NSRunningApplication) -> Bool {
                            && ($0[kCGWindowLayer as String] as? Int) == 0 }
 }
 
+/// Same spot and size, give or take a few points.
+func near(_ a: CGRect, _ b: CGRect) -> Bool {
+    abs(a.minX - b.minX) + abs(a.minY - b.minY) + abs(a.width - b.width) + abs(a.height - b.height) < 8
+}
+
 func lerp(_ a: CGFloat, _ b: CGFloat, _ t: Double) -> CGFloat { a + (b - a) * t }
 func lerp(_ a: CGRect, _ b: CGRect, _ t: Double) -> CGRect {
     CGRect(x: lerp(a.minX, b.minX, t), y: lerp(a.minY, b.minY, t),
@@ -935,9 +940,15 @@ final class Drawer {
                     }
                     return
                 }
+                // Minimised to the Dock, or just restored from it right into its drawer spot (clicked in the
+                // Dock): let the genie put it in place, no slide.
+                if isMinimized(w) || (!app.isHidden && onCurrentSpace(app) && axFrame(w).map { near($0, self.openFrame(pair)) } == true) {
+                    t.invalidate()
+                    self.pending[pair.id] = nil
+                    self.present(pair, app: app, window: w, inPlace: true)
+                    return
+                }
                 if !app.isHidden { app.hide(); return }
-                // Minimised to the Dock: restore it while the app is hidden, so there's no genie on the way back.
-                if isMinimized(w) { setMinimized(w, false); return }
                 self.park(pair, w)
                 parked = true
                 app.unhide()
@@ -1012,12 +1023,29 @@ final class Drawer {
         return stageLayout(area: area, pairs: pairs).drawers[pair.id] ?? area
     }
 
-    private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement) {
+    /// `inPlace`: the window is minimised (or was just restored into its spot): it genies into the drawer spot
+    /// instead of sliding in.
+    private func present(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement, inPlace: Bool = false) {
         let st = stage(for: pair.mainID)
         let before = st.layout()
         lastWindows[pair.drawerID] = w
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
+        if inPlace {
+            let after = st.layout()
+            guard let open = after.drawers[pair.id] else { return }
+            s.parked = closedFrame(open, edge: pair.edge).origin
+            s.expected = open
+            if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
+            if isMinimized(w) {
+                setFrame(w, open)   // where the genie lands
+                if app.isHidden { app.unhide() }
+                setMinimized(w, false)
+            }
+            bringToFront(app, w)
+            settle(st, s, app: app, window: w, before: before, after: after, duration: 0.5, moving: false)
+            return
+        }
         guard let guess = st.layout().drawers[pair.id] else { return }
         setFrame(w, closedFrame(guess, edge: pair.edge))
         // If the app won't go that small (Rex has a minimum height), find out now, before sliding,
@@ -1033,13 +1061,23 @@ final class Drawer {
         if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
         bringToFront(app, w)   // drawer in front, so its neighbours can resize behind it
 
+        settle(st, s, app: app, window: w, before: before, after: after, from: start, duration: 0.28, moving: true)
+    }
+
+    /// Slide the drawer from `start` to its spot (`moving`), or just wait out `duration` while it appears there
+    /// some other way (the genie), with tiled neighbours making room alongside; then dock it.
+    private func settle(_ st: Stage, _ s: DrawerSession, app: NSRunningApplication, window w: AXUIElement,
+                        before: StageLayout, after: StageLayout, from start: CGRect? = nil, duration: Double, moving: Bool) {
+        let pair = s.pair
+        guard let open = after.drawers[pair.id] else { return }
+        let start = start ?? closedFrame(open, edge: pair.edge)
         // The new drawer moves on the main thread every screen refresh; the main window and the other drawers
         // are resized on background queues (latest frame wins), so slow apps can't stall the slide.
         let others = st.sessions.filter { $0 !== s }
         st.quietUntil = .infinity
-        st.animator.run(duration: 0.28, curve: easeOutCubic, step: { e in
+        st.animator.run(duration: duration, curve: easeOutCubic, step: { e in
             let d = lerp(start, open, e)
-            setPos(w, d.origin)
+            if moving { setPos(w, d.origin) }
             let lead = 40 * (1 - e)   // tapers to zero so the last frame is exact (no snap)
             if pair.tiles {
                 st.setMain(track(old: before.main, new: after.main, edge: pair.edge, drawer: d, lead: lead))

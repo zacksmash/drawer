@@ -718,6 +718,7 @@ final class Drawer {
     /// `dismiss`: the main app was already in front, so the click means "done with the drawers". A click that
     /// only brings the main window forward (from a drawer or another app) leaves them open, back on top.
     func mainPressed(_ mainID: String, dismiss: Bool) {
+        lastMainPress[mainID] = CACurrentMediaTime()
         guard let st = stages[mainID], st.pressWatch == nil else { return }
         if dismiss { dropFloating(st) }   // a click on the main window covers floating drawers anyway: hide them now
         guard stages[mainID] === st, let mw = st.mainWindow, let start = axFrame(mw) else { return }
@@ -811,6 +812,9 @@ final class Drawer {
         return pair.id
     }
 
+    /// When the event tap last saw a press on each main window.
+    private var lastMainPress: [String: CFTimeInterval] = [:]
+
     init() {
         // Switching to the main app (⌘-Tab) dismisses its floating drawers, which it would cover anyway. A click
         // only does when the main app was already in front (see mainPressed).
@@ -820,7 +824,8 @@ final class Drawer {
             guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
                   let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
                   let st = self.stages[id] else { return }
-            if NSEvent.pressedMouseButtons & 1 != 0 {
+            // A quick click can be over before this arrives, so also count a press the event tap just saw.
+            if NSEvent.pressedMouseButtons & 1 != 0 || CACurrentMediaTime() - (self.lastMainPress[id] ?? 0) < 1 {
                 self.mainPressed(id, dismiss: false)   // clicked from elsewhere (no-op if the event tap already handled the press)
             } else {
                 self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab

@@ -16,10 +16,14 @@ final class CarouselController {
     var memberIDs: Set<String> { Set(Config.shared.carousels.filter { $0.members.count > 1 }.flatMap(\.members)) }
 
     func cycle(front: String?, shortcut: Shortcut) {
+        cycle(front: front, forward: shortcut == Config.shared.shortcut(for: .right))
+    }
+
+    /// Forward = the next app, coming in from the right.
+    func cycle(front: String?, forward: Bool) {
         guard AXIsProcessTrusted() else { drawer.promptAccessibility(); return }
         guard let front, let c = Config.shared.carousel(containing: front), !busy.contains(c.id),
               let cur = c.members.firstIndex(of: front) else { return }
-        let forward = shortcut == Config.shared.shortcut(for: .right)
         let members = c.members
         let next = (cur + (forward ? 1 : -1) + members.count) % members.count
         let curApp = running(front)
@@ -33,11 +37,24 @@ final class CarouselController {
         }
     }
 
+    /// Where the incoming window starts. Windows can't be clipped to the carousel's spot, so it starts
+    /// fully hidden past the screen edge when the spot touches that edge, and otherwise only a short way
+    /// out, so it barely shows outside the spot on its way in.
+    private func entryFrame(_ frame: CGRect, from edge: Edge) -> CGRect {
+        let off = closedFrame(frame, edge: edge)   // just past the screen edge on that side
+        let nudge = frame.width * 0.2
+        switch edge {
+        case .left: return frame.minX - off.minX <= frame.width + 1 ? off : frame.offsetBy(dx: -nudge, dy: 0)
+        case .right: return off.minX - frame.minX <= frame.width + 1 ? off : frame.offsetBy(dx: nudge, dy: 0)
+        case .bottom: return off
+        }
+    }
+
     /// Launch or unhide `id`, park its window just off-screen on `edge` at `frame`'s size, then slide it in.
     private func bringIn(_ id: String, frame: CGRect, from edge: Edge, done: @escaping (Bool) -> Void) {
         let started = CACurrentMediaTime()
         var parked = false, reopened = false
-        let closed = closedFrame(frame, edge: edge)
+        let closed = entryFrame(frame, from: edge)
         if running(id) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { done(false); return }
             let conf = NSWorkspace.OpenConfiguration()
@@ -74,7 +91,7 @@ final class CarouselController {
             setSize(w, frame.size)
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
-            self.animator.run(duration: 0.3, curve: easeOutCubic, step: { e in
+            self.animator.run(duration: 0.25, curve: easeOutCubic, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
             }) {
                 setFrame(w, frame)

@@ -17,6 +17,7 @@ final class Hotkey {
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
+        var carouselFronts: Set<String> = []   // apps in a carousel (fn + swipe cycles them)
         var peek = true
     }
 
@@ -31,6 +32,11 @@ final class Hotkey {
     private var resizing: UUID?              // drawer whose inner edge is being dragged
     private var resizeIsDoubleClick = false
     private let peekThreshold = 0.35
+    private var swipeX: Double = 0           // fn + horizontal scroll travel in the current gesture
+    private var swipeFired = false           // this gesture already cycled
+    private var swipeLast: CFTimeInterval = 0
+    private var flick: (start: CFTimeInterval, x: Double)?   // fn + pointer flick
+    private var flickFiredAt: CFTimeInterval = 0
 
     // Main-thread state.
     private var openedByPress: UUID?         // drawer this press opened, closed on release if it was a peek
@@ -61,6 +67,7 @@ final class Hotkey {
         s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
+        s.carouselFronts = carousels.memberIDs
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
     }
@@ -74,7 +81,8 @@ final class Hotkey {
     /// until it's gone. AXIsProcessTrusted() can't tell — it keeps answering "yes" for the rest of the
     /// process's life — so a fresh helper process asks instead (see liveTrusted).
     private func runTap() {
-        let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                                    .scrollWheel, .mouseMoved]
         let mask = types.reduce(CGEventMask(0)) { $0 | CGEventMask(1 << $1.rawValue) }
         while true {
             while !liveTrusted() { Thread.sleep(forTimeInterval: 1) }
@@ -126,6 +134,8 @@ final class Hotkey {
         let s = current()
 
         switch type {
+        case .scrollWheel: return swipe(event, s)
+        case .mouseMoved: flicked(event, s); return false
         case .leftMouseDown:
             let p = event.location   // global top-left coords, same as Accessibility
             // The inner edge (facing the main window) resizes the drawer. Drawer does the resizing itself,
@@ -186,6 +196,7 @@ final class Hotkey {
         }
 
         if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
+        flick = nil
         let flags = event.flags.intersection(Shortcut.modifierMask)
         guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }),
               let front = s.front, s.handledFronts.contains(front) else { return false }
@@ -202,6 +213,53 @@ final class Hotkey {
             self.refresh()
         }
         return true
+    }
+
+    // MARK: fn + swipe (carousels)
+
+    /// Only the fn key held (no ⌃⌥⇧⌘), in front of a carousel app.
+    private func fnOnly(_ event: CGEvent, _ s: Snapshot) -> Bool {
+        guard let front = s.front, s.carouselFronts.contains(front) else { return false }
+        return event.flags.intersection(Shortcut.modifierMask) == .maskSecondaryFn
+    }
+
+    private func cycle(forward: Bool) {
+        DispatchQueue.main.async {
+            carousels.cycle(front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, forward: forward)
+            self.refresh()
+        }
+    }
+
+    /// fn + a sideways scroll (two fingers on a trackpad, one on a Magic Mouse) cycles once per gesture.
+    /// Fingers moving left bring in the next app from the right.
+    private func swipe(_ event: CGEvent, _ s: Snapshot) -> Bool {
+        let now = CACurrentMediaTime()
+        if now - swipeLast > 0.35 { swipeX = 0; swipeFired = false }   // a new gesture
+        swipeLast = now
+        guard fnOnly(event, s), let e = NSEvent(cgEvent: event) else { return false }
+        if swipeFired { return true }   // swallow the rest of this gesture, momentum included
+        let dx = Double(e.scrollingDeltaX) * (e.hasPreciseScrollingDeltas ? 1 : 10)
+        guard abs(dx) >= abs(Double(e.scrollingDeltaY)) else { return false }
+        swipeX += e.isDirectionInvertedFromDevice ? dx : -dx   // > 0: fingers moving right
+        if abs(swipeX) > 40 {
+            swipeFired = true
+            cycle(forward: swipeX < 0)
+        }
+        return true
+    }
+
+    /// fn + a quick sideways flick of the pointer (one finger on a trackpad) cycles too.
+    private func flicked(_ event: CGEvent, _ s: Snapshot) {
+        guard fnOnly(event, s) else { flick = nil; return }
+        let now = CACurrentMediaTime(), x = Double(event.location.x)
+        guard now - flickFiredAt > 0.4 else { return }
+        guard let f = flick, now - f.start < 0.25 else { flick = (now, x); return }
+        let dx = x - f.x
+        if abs(dx) > 160 {
+            flick = nil
+            flickFiredAt = now
+            cycle(forward: dx < 0)   // flick left → next app from the right
+        }
     }
 }
 

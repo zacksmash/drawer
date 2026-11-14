@@ -6,7 +6,7 @@ APP=build/Drawer.app
 rm -rf "$APP" build/Drawer.iconset
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/Drawer.iconset
 
-swiftc -O Config.swift Drawer.swift Hotkey.swift Settings.swift main.swift -o "$APP/Contents/MacOS/Drawer"
+swiftc -O Config.swift Drawer.swift Carousel.swift Hotkey.swift Settings.swift main.swift -o "$APP/Contents/MacOS/Drawer"
 
 # Icon
 swift Icon.swift build/icon.png

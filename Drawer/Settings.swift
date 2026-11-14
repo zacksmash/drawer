@@ -12,6 +12,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             let tabs = NSTabViewController()
             tabs.tabStyle = .toolbar
             tabs.addTabViewItem(tab("Drawers", "rectangle.bottomhalf.filled", DrawersTab()))
+            tabs.addTabViewItem(tab("Carousels", "square.stack.3d.forward.dottedline", CarouselsTab()))
             tabs.addTabViewItem(tab("General", "gearshape", GeneralTab()))
             let w = NSWindow(contentViewController: tabs)
             w.styleMask = [.titled, .closable]
@@ -120,6 +121,87 @@ struct DrawersTab: View {
         if let i = cfg.pairs.firstIndex(where: { $0.id == p.id }),
            cfg.pairs[..<i].contains(where: { $0.mainID == p.mainID && $0.effectiveShortcut == p.effectiveShortcut }) {
             return "Same shortcut as another drawer — it won't open"
+        }
+        return nil
+    }
+}
+
+// MARK: Carousels tab
+
+struct CarouselsTab: View {
+    @EnvironmentObject var cfg: Config
+
+    var body: some View {
+        Form {
+            if cfg.carousels.isEmpty {
+                Section { Text("No carousels yet.").foregroundStyle(.secondary) }
+            }
+            ForEach($cfg.carousels) { $c in
+                Section {
+                    AppPickerRow(title: "Main app", id: $c.mainID)
+                    ForEach(Array(c.appIDs.enumerated()), id: \.offset) { i, id in
+                        HStack(spacing: 8) {
+                            Text("\(i + 2)").monospacedDigit().foregroundStyle(.tertiary).frame(width: 16)
+                            AppIcon(id: id, size: 18)
+                            Text(appName(id))
+                            Spacer()
+                            Button { c.appIDs.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }
+                                .disabled(i == 0)
+                            Button { c.appIDs.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }
+                                .disabled(i == c.appIDs.count - 1)
+                            Button { c.appIDs.remove(at: i) } label: { Image(systemName: "minus.circle") }
+                                .help("Take \(appName(id)) out of the carousel")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    Menu("Add App") {
+                        ForEach(AppCatalog.apps(including: "").filter { !c.members.contains($0.id) }, id: \.id) { a in
+                            Button { c.appIDs.append(a.id) } label: {
+                                Label { Text(a.name) } icon: { AppIcon(id: a.id, size: 16) }
+                            }
+                        }
+                    }
+                    .disabled(c.mainID.isEmpty)
+                } header: {
+                    HStack(spacing: 8) {
+                        AppIcon(id: c.mainID, size: 18)
+                        Text(c.mainID.isEmpty ? "New carousel" : appName(c.mainID))
+                        Spacer()
+                        Button(role: .destructive) { cfg.carousels.removeAll { $0.id == c.id } } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Delete this carousel")
+                    }
+                } footer: {
+                    if let clash = clash(c) {
+                        Label(clash, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                }
+            }
+            Section {
+            } footer: {
+                HStack(alignment: .top) {
+                    Text("Apps in a carousel take turns in the same spot. While one is in front, \(cfg.shortcut(for: .right).display) slides in the next and \(cfg.shortcut(for: .left).display) the previous, wrapping around. Move or resize whichever is showing and the rest follow.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Add Carousel…") { cfg.carousels.append(Carousel(mainID: "")) }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 540, height: min(680, 140 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
+    }
+
+    /// Why part of this carousel won't work as expected, if so.
+    private func clash(_ c: Carousel) -> String? {
+        if let other = cfg.carousels.first(where: { $0.id != c.id && !Set($0.members).isDisjoint(with: c.members) && $0.members.count > 1 }),
+           let shared = c.members.first(where: other.members.contains) {
+            return "\(appName(shared)) is in another carousel too — only the first one cycles."
+        }
+        let sides = Set([cfg.shortcut(for: .left), cfg.shortcut(for: .right)])
+        if let p = cfg.pairs.first(where: { c.members.contains($0.mainID) && sides.contains($0.effectiveShortcut) }) {
+            return "\(appName(p.mainID))'s \(p.edge.rawValue) drawer shares a cycling shortcut, so it won't open."
         }
         return nil
     }

@@ -27,6 +27,15 @@ struct Pair: Codable, Identifiable, Equatable {
     var tiles: Bool { shrinkMain && !isFull }
 }
 
+/// Apps that take turns in one spot: the main app's window. fn⌃. / fn⌃, cycle through them.
+struct Carousel: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var mainID: String
+    var appIDs: [String] = []       // in order, after the main app
+
+    var members: [String] { [mainID] + appIDs }
+}
+
 struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
@@ -84,6 +93,7 @@ final class Config: ObservableObject {
 
     @Published var pairs: [Pair] { didSet { store(pairs, "pairs") } }
     @Published var edgeShortcuts: [String: Shortcut] { didSet { store(edgeShortcuts, "edgeShortcuts") } }
+    @Published var carousels: [Carousel] { didSet { store(carousels, "carousels") } }
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
 
@@ -102,6 +112,7 @@ final class Config: ObservableObject {
             edges[Edge.bottom.rawValue] = old   // keep a custom single shortcut from earlier versions on the bottom slot
         }
         edgeShortcuts = edges
+        carousels = load("carousels") ?? []
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
     }
@@ -122,8 +133,20 @@ final class Config: ObservableObject {
         edgeShortcuts[edge.rawValue] = s == .default(for: edge) ? nil : s
     }
 
+    /// The carousel `app` belongs to, if any.
+    func carousel(containing app: String?) -> Carousel? {
+        guard let app else { return nil }
+        return carousels.first { $0.members.contains(app) && $0.members.count > 1 }
+    }
+
     /// Every distinct shortcut in use.
-    var allShortcuts: [Shortcut] { Array(Set(pairs.map(\.effectiveShortcut))) }
+    var allShortcuts: [Shortcut] {
+        var all = Set(pairs.map(\.effectiveShortcut))
+        if carousels.contains(where: { $0.members.count > 1 }) {
+            all.insert(shortcut(for: .left)); all.insert(shortcut(for: .right))
+        }
+        return Array(all)
+    }
 }
 
 /// Gap macOS puts between tiled windows (System Settings → Desktop & Dock → "Tiled windows have margins").

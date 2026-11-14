@@ -1020,6 +1020,15 @@ final class Drawer {
         }
     }
 
+    /// If `mainID` has drawers open, hide them at once and return the main window's full (un-drawered)
+    /// frame. Used when a carousel swaps the main app out.
+    func releaseMain(_ mainID: String) -> CGRect? {
+        guard let st = stages[mainID] else { return nil }
+        let area = st.area
+        dropAll(st)
+        return area
+    }
+
     /// Hide every drawer of `st` at once (no animation) and give the main window back its full,
     /// un-drawered size, where it is now. Set again once the mouse is released, since macOS may
     /// still be sizing it while it's being dragged.

@@ -56,7 +56,7 @@ final class Hotkey {
     func refresh() {
         var s = Snapshot()
         s.front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs)
+        s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs).union(carousels.memberIDs)
         s.lockedFrames = drawer.lockedFrames
         s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
@@ -192,7 +192,13 @@ final class Hotkey {
         pressedAt = CACurrentMediaTime()
         pressedKey = key
         DispatchQueue.main.async {
-            self.openedByPress = drawer.toggle(shortcut)
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if carousels.handles(front: front, shortcut: shortcut) {
+                carousels.cycle(front: front, shortcut: shortcut)   // ‹ / › in a carousel app
+                self.openedByPress = nil
+            } else {
+                self.openedByPress = drawer.toggle(shortcut)
+            }
             self.refresh()
         }
         return true

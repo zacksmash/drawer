@@ -10,6 +10,7 @@ if CommandLine.arguments.contains("--trust-check") { exit(AXIsProcessTrusted() ?
 
 let drawer = Drawer()
 let hotkey = Hotkey()
+let carousels = CarouselController()
 let settings = SettingsWindow()
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {

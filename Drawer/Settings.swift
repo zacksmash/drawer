@@ -539,8 +539,8 @@ struct GeneralTab: View {
                     Text("Switching to a drawer or carousel app from the Dock or ⌘-Tab puts it in its spot.")
                 }
                 Toggle(isOn: $cfg.hoverTarget) {
-                    Text("Shortcuts act on the app under the pointer")
-                    Text("Otherwise they act on the app in front.")
+                    Text("Carousels follow the pointer")
+                    Text("Cycle the carousel under the pointer, even when another app is in front. Drawers always open for the app in front.")
                 }
                 Toggle(isOn: $cfg.peek) {
                     Text("Hold to peek")

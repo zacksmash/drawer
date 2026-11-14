@@ -199,13 +199,16 @@ final class Hotkey {
 
         if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
         let flags = event.flags.intersection(Shortcut.modifierMask)
-        guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }),
-              let front = target(s), s.handledFronts.contains(front) else { return false }
+        guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }) else { return false }
+        // Carousels follow the pointer (setting on); drawers always go with the app in front.
+        let hovered = target(s).flatMap { s.carouselFronts.contains($0) ? $0 : nil }
+        let front = s.front
+        guard hovered != nil || front.map(s.handledFronts.contains) == true else { return false }
         pressedAt = CACurrentMediaTime()
         pressedKey = key
         DispatchQueue.main.async {
-            if carousels.handles(front: front, shortcut: shortcut) {
-                carousels.cycle(front: front, shortcut: shortcut)   // ‹ / › in a carousel app
+            if let c = [hovered, front].compactMap({ $0 }).first(where: { carousels.handles(front: $0, shortcut: shortcut) }) {
+                carousels.cycle(front: c, shortcut: shortcut)   // ‹ / › in a carousel app
                 self.openedByPress = nil
                 self.cycledByPress = true
             } else {
@@ -219,7 +222,7 @@ final class Hotkey {
 
     // MARK: fn + swipe (carousels)
 
-    /// The app a shortcut or swipe is for: the one under the pointer (setting on), else the one in front.
+    /// The carousel app a shortcut or swipe is for: the one under the pointer (setting on), else the one in front.
     private func target(_ s: Snapshot) -> String? {
         s.hoverTarget ? (appUnderPointer() ?? s.front) : s.front
     }

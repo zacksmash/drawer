@@ -9,10 +9,6 @@ final class CarouselController {
     /// The last swap, so a peek (shortcut held) can undo it on release.
     private var last: (carousel: UUID, from: String, to: String, forward: Bool)?
     private var returnWanted = false
-    /// While the shortcut that cycled is still held, the app it replaced stays under the new one (so a
-    /// peek can back out over it); it's hidden once the key comes up as a tap.
-    private var keyHeld = false
-    private var underneath: NSRunningApplication?
     /// The slide in progress, so a peek let go mid-way can turn straight back from where it is.
     private var sliding: (carousel: UUID, window: AXUIElement, app: NSRunningApplication, from: CGRect, to: CGRect)?
 
@@ -42,15 +38,12 @@ final class CarouselController {
         guard let frame = drawer.releaseMain(front) ?? curApp.flatMap(axWindow).flatMap(axFrame) else { return }
         last = (c.id, front, members[next], forward)
         returnWanted = false
-        underneath?.hide(); underneath = nil
-        keyHeld = held
         swap(c.id, from: curApp, to: members[next], frame: frame, edge: forward ? .right : .left)
     }
 
-    /// The cycling shortcut came up: a peek goes back; a tap keeps the new app and hides the old one.
+    /// The cycling shortcut came up: a peek goes back; a tap keeps the new app.
     func keyReleased(peek: Bool) {
-        keyHeld = false
-        if peek { endPeek() } else { underneath?.hide(); underneath = nil }
+        if peek { endPeek() }
     }
 
     /// The user switched to `app` itself (Dock, ⌘-Tab…). If it's in a carousel and another member is
@@ -109,17 +102,17 @@ final class CarouselController {
         busy.insert(cid)
         let finish: (Bool) -> Void = { [weak self] ok in
             guard let self else { return }
-            // Still held: leave the old app underneath for a peek to back out over.
-            if ok, !reversed, self.keyHeld || self.returnWanted { self.underneath = from }
-            else if ok { from?.hide() }
+            if ok { from?.hide() }
             self.busy.remove(cid)
             if self.returnWanted { self.returnWanted = false; self.endPeek() }
         }
         if reversed { backOut(from, to: to, frame: frame, toward: edge, done: finish) }
-        else { bringIn(to, frame: frame, from: edge, carousel: cid, done: finish) }
+        // Hide the current app the moment the next one appears over it: two windows stacked in the same
+        // spot would show a doubled, darker shadow while it slides in.
+        else { bringIn(to, frame: frame, from: edge, carousel: cid, willShow: { from?.hide() }, done: finish) }
     }
 
-    /// Peek let go: `to` is back in the spot (it stayed underneath) and `app` simply disappears.
+    /// Peek let go: `to` comes back in the spot and `app` simply disappears (no animation).
     private func backOut(_ app: NSRunningApplication?, to: String, frame: CGRect, toward edge: Edge,
                          done: @escaping (Bool) -> Void) {
         guard let app, let w = axWindow(app), let back = running(to), let bw = axWindow(back) else {
@@ -135,10 +128,12 @@ final class CarouselController {
     /// Peek let go: hide the peeked app on the spot (no animation), leaving `back` in front.
     private func retreat(_ w: AXUIElement, app: NSRunningApplication, to: CGRect, home: CGRect,
                          revealing back: NSRunningApplication?, done: @escaping () -> Void) {
-        if let back, let bw = axWindow(back) { bringToFront(back, bw) }
+        if let back, let bw = axWindow(back) {
+            if back.isHidden { setFrame(bw, home); back.unhide() }   // hidden as the peeked app came in
+            bringToFront(back, bw)
+        }
         app.hide()
         setFrame(w, home)   // in place for next time
-        underneath = nil
         done()
     }
 
@@ -156,7 +151,7 @@ final class CarouselController {
     /// Launch or unhide `id`, park its window just outside the spot on `edge`, then slide it in.
     /// Not `animated`: put it straight in the spot and in front.
     private func bringIn(_ id: String, frame: CGRect, from edge: Edge, carousel: UUID? = nil,
-                         animated: Bool = true, done: @escaping (Bool) -> Void) {
+                         animated: Bool = true, willShow: (() -> Void)? = nil, done: @escaping (Bool) -> Void) {
         let started = CACurrentMediaTime()
         var parked = false, reopened = false
         let closed = animated ? entryFrame(frame, from: edge) : frame
@@ -190,6 +185,7 @@ final class CarouselController {
                 // Activating it unhides it already in front; a plain unhide can show it behind the current
                 // app for a frame before it's raised (a flicker).
                 bringToFront(app, w)
+                willShow?()
                 return
             }
             if app.isHidden { app.unhide(); return }

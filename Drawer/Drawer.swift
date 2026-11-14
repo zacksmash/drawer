@@ -223,12 +223,17 @@ let easeInCubic: (Double) -> Double = { $0 * $0 * $0 }           // leave: gentl
 final class AsyncResizer {
     private let queue = DispatchQueue(label: "drawer.resize", qos: .userInteractive)
     private let lock = NSLock()
-    private var latest: (AXUIElement, CGRect)?
+    private var latest: (AXUIElement, CGRect, Bool)?   // window, frame, move only (keep its size)
     private var busy = false
 
-    func request(_ window: AXUIElement, _ frame: CGRect) {
+    func request(_ window: AXUIElement, _ frame: CGRect) { enqueue((window, frame, false)) }
+
+    /// Just move it. Much cheaper for the app than a resize, which makes it lay out again (and jitter).
+    func move(_ window: AXUIElement, _ origin: CGPoint) { enqueue((window, CGRect(origin: origin, size: .zero), true)) }
+
+    private func enqueue(_ job: (AXUIElement, CGRect, Bool)) {
         lock.lock()
-        latest = (window, frame)
+        latest = job
         guard !busy else { lock.unlock(); return }
         busy = true
         lock.unlock()
@@ -241,7 +246,7 @@ final class AsyncResizer {
             guard let job = latest else { busy = false; lock.unlock(); return }
             latest = nil
             lock.unlock()
-            setFrame(job.0, job.1)
+            if job.2 { setPos(job.0, job.1.origin) } else { setFrame(job.0, job.1) }
         }
     }
 }
@@ -548,8 +553,8 @@ final class Drawer {
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
                   let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
-                  let st = self.stages[id] else { return }
-            for s in st.sessions where s.docked && !s.pair.shrinkMain { self.close(s.pair.id, raise: false) }
+                  let st = self.stages[id], st.sessions.contains(where: { $0.docked && !$0.pair.shrinkMain }) else { return }
+            self.mainClicked(st)
         }
         // Quitting an app with a dragged-out drawer window closes that window too.
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -558,6 +563,26 @@ final class Drawer {
                   let p = self.popped[id] else { return }
             self.forgetMovedSpot(p)
         }
+    }
+
+    /// The user brought the main app forward. A click dismisses its floating drawers; dragging the main
+    /// window (which also brings it forward) keeps them, raised back over it once the drag ends.
+    private func mainClicked(_ st: Stage) {
+        let startFrame = st.mainWindow.flatMap(axFrame)
+        let t = Timer(timeInterval: 0.03, repeats: true) { [weak self, weak st] t in
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }   // wait for the mouse to come up
+            t.invalidate()
+            guard let self, let st, self.stages[st.mainID] === st else { return }
+            let floating = st.sessions.filter { $0.docked && !$0.pair.shrinkMain }
+            let moved = startFrame != nil && st.mainWindow.flatMap(axFrame)?.origin != startFrame?.origin
+            if moved {
+                for s in floating { if let a = running(s.pair.drawerID) { bringToFront(a, s.window) } }
+            } else {
+                for s in floating { self.close(s.pair.id, raise: false) }
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        t.fire()
     }
 
     /// A dragged-out drawer window closed: make its app reopen it in the drawer spot, not where it was moved to.
@@ -890,7 +915,7 @@ final class Drawer {
         st.area = st.area.offsetBy(dx: dx, dy: dy)
         for s in st.sessions {
             s.expected = s.expected.offsetBy(dx: dx, dy: dy)   // update first, so it isn't seen as a pop-out
-            s.resizer.request(s.window, s.expected)
+            s.resizer.move(s.window, s.expected.origin)
             s.parked = s.pair.edge == .bottom ? CGPoint(x: s.expected.minX, y: s.parked.y)
                                               : CGPoint(x: s.parked.x, y: s.expected.minY)
         }
@@ -913,7 +938,7 @@ final class Drawer {
             guard NSEvent.pressedMouseButtons & 1 == 0, still > 6 else { return true }
             st.follower = nil
             for s in st.sessions where s.docked {
-                if let f = axFrame(s.window), f.origin != s.expected.origin { s.resizer.request(s.window, s.expected) }
+                if let f = axFrame(s.window), f.origin != s.expected.origin { s.resizer.move(s.window, s.expected.origin) }
             }
             return false
         }

@@ -18,7 +18,7 @@
 
 ## What it does
 
-Pick a **main app** (your editor, browser, whatever you live in) and give it **drawers**: other apps that slide out from its left, bottom or right edge on a shortcut, sized to its window. Press the shortcut again and they slide away. Or put several apps in a **carousel** and flick between them in the same spot.
+Pick a **main app** (your editor, browser, whatever you live in) and give it **drawers**: other apps that slide out from its left, top, bottom or right edge on a shortcut, sized to its window. Press the shortcut again and they slide away. Or put several apps in a **carousel** and flick between them in the same spot.
 
 <p align="center">
   <img src="docs/modes.svg" alt="Overlay, Make room and Carousel modes" width="100%">
@@ -64,7 +64,7 @@ Drawer lives in the menu bar. Open **Settings…** from its menu.
 ### Drawers
 
 1. **Drawers** tab → **Add Drawer…**
-2. Choose the **main app** and the **drawer app**, the **edge** (left, bottom or right) and a **size** (⅓, ½, ⅔ or Full).
+2. Choose the **main app** and the **drawer app**, the **edge** (left, top, bottom or right) and a **size** (⅓, ½, ⅔ or Full).
 3. Turn on **Make room** to tile beside the main window instead of overlaying it.
 
 Then, with the main app in front:
@@ -72,6 +72,7 @@ Then, with the main app in front:
 | Shortcut | Drawer |
 | --- | --- |
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>,</kbd> | Left |
+| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>X</kbd> | Top |
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>D</kbd> | Bottom |
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>.</kbd> | Right |
 
@@ -104,7 +105,7 @@ While any app in the carousel is in front, or under the pointer:
 Move or resize whichever app is showing and the rest follow. The carousel's spot is wherever the current app's window is.
 
 > [!NOTE]
-> In a carousel app, <kbd>fn</kbd><kbd>⌃</kbd><kbd>,</kbd> and <kbd>fn</kbd><kbd>⌃</kbd><kbd>.</kbd> cycle the carousel, so left and right drawers on that app won't open. Bottom drawers still work. Settings shows a warning when this applies.
+> In a carousel app, <kbd>fn</kbd><kbd>⌃</kbd><kbd>,</kbd> and <kbd>fn</kbd><kbd>⌃</kbd><kbd>.</kbd> cycle the carousel, so left and right drawers on that app won't open. Top and bottom drawers still work. Settings shows a warning when this applies.
 
 ## Good to know
 

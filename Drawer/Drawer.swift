@@ -111,7 +111,7 @@ struct StageLayout {
 }
 
 /// Lay out `pairs` (the open drawers of one main app) around the main window's full frame `area`.
-/// Tiled ("make room") side drawers take full-height strips and a tiled bottom drawer spans the width
+/// Tiled ("make room") side drawers take full-height strips and tiled top and bottom drawers span the width
 /// left between them; the main window gets what remains. Floating drawers sit inside the main window.
 /// Smallest size each drawer app will let its window be (e.g. Rex won't go under 526pt tall), learned by
 /// asking for a size and reading back what the app kept. Layouts never go below it, so the drawer stays
@@ -149,9 +149,9 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     var drawers: [UUID: CGRect] = [:]
     let tiled = pairs.filter(\.tiles), floating = pairs.filter { !$0.tiles }
 
-    // Tiled: sides first (full height), then bottom between them.
+    // Tiled: sides first (full height), then top and bottom between them.
     func minSize(_ p: Pair) -> CGSize { minSizes[p.drawerID] ?? .zero }
-    for p in tiled where p.edge != .bottom {
+    for p in tiled where !p.edge.vertical {
         let w = max(((area.width - gap) * p.size).rounded(), min(minSize(p).width, main.width - gap - 200))
         if p.edge == .left {
             drawers[p.id] = CGRect(x: main.minX, y: area.minY, width: w, height: area.height)
@@ -161,10 +161,15 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
             main.size.width -= w + gap
         }
     }
-    for p in tiled where p.edge == .bottom {
+    for p in tiled where p.edge.vertical {
         let h = max(((area.height - gap) * p.size).rounded(), min(minSize(p).height, main.height - gap - 200))
-        drawers[p.id] = CGRect(x: main.minX, y: main.maxY - h, width: main.width, height: h)
-        main.size.height -= h + gap
+        if p.edge == .top {
+            drawers[p.id] = CGRect(x: main.minX, y: main.minY, width: main.width, height: h)
+            main = CGRect(x: main.minX, y: main.minY + h + gap, width: main.width, height: main.height - h - gap)
+        } else {
+            drawers[p.id] = CGRect(x: main.minX, y: main.maxY - h, width: main.width, height: h)
+            main.size.height -= h + gap
+        }
     }
     main.size.width = max(200, main.width)
     main.size.height = max(200, main.height)
@@ -174,6 +179,9 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
         if p.isFull { drawers[p.id] = main; continue }   // covers it exactly
         let r = main.insetBy(dx: inset, dy: inset)
         switch p.edge {
+        case .top:
+            let h = min(max(((main.height - inset) * p.size).rounded(), minSize(p).height), r.height)
+            drawers[p.id] = CGRect(x: r.minX, y: r.minY, width: r.width, height: h)
         case .bottom:
             let h = min(max(((main.height - inset) * p.size).rounded(), minSize(p).height), r.height)
             drawers[p.id] = CGRect(x: r.minX, y: r.maxY - h, width: r.width, height: h)
@@ -195,6 +203,7 @@ func closedFrame(_ open: CGRect, edge: Edge) -> CGRect {
     let sf = (NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.screens[0]).frame
     let screen = CGRect(x: sf.minX, y: primaryH - sf.maxY, width: sf.width, height: sf.height)
     switch edge {
+    case .top: return open.offsetBy(dx: 0, dy: screen.minY - open.maxY)
     case .bottom: return open.offsetBy(dx: 0, dy: screen.maxY - open.minY)
     case .left: return open.offsetBy(dx: screen.minX - open.maxX, dy: 0)
     case .right: return open.offsetBy(dx: screen.maxX - open.minX, dy: 0)
@@ -207,6 +216,10 @@ func track(old: CGRect, new: CGRect, edge: Edge, drawer d: CGRect, lead: CGFloat
     let gap = tileGap
     var r = new
     switch edge {
+    case .top:
+        let lo = min(old.minY, new.minY), hi = max(old.minY, new.minY)
+        let top = min(max(d.maxY + gap - lead, lo), hi)
+        r.size.height = new.maxY - top; r.origin.y = top
     case .bottom:
         let lo = min(old.maxY, new.maxY), hi = max(old.maxY, new.maxY)
         let bottom = min(max(d.minY - gap + lead, lo), hi)
@@ -594,6 +607,7 @@ final class Drawer {
         stages.values.flatMap { st in st.sessions.filter { $0.docked && !$0.pair.isFull }.map { s -> (UUID, CGRect) in
             let f = s.expected
             switch s.pair.edge {
+            case .top: return (s.pair.id, CGRect(x: f.minX, y: f.maxY - 5, width: f.width, height: 13))
             case .bottom: return (s.pair.id, CGRect(x: f.minX, y: f.minY - 8, width: f.width, height: 13))
             case .left: return (s.pair.id, CGRect(x: f.maxX - 5, y: f.minY, width: 13, height: f.height))
             case .right: return (s.pair.id, CGRect(x: f.minX - 8, y: f.minY, width: 13, height: f.height))
@@ -610,6 +624,7 @@ final class Drawer {
         if s.pair.tiles {
             let a = st.area
             switch s.pair.edge {
+            case .top: size = (p.y - a.minY) / (a.height - gap)
             case .bottom: size = (a.maxY - p.y) / (a.height - gap)
             case .left: size = (p.x - a.minX) / (a.width - gap)
             case .right: size = (a.maxX - p.x) / (a.width - gap)
@@ -617,6 +632,7 @@ final class Drawer {
         } else {
             let m = st.layout().main
             switch s.pair.edge {
+            case .top: size = (p.y - m.minY - inset) / (m.height - inset)
             case .bottom: size = (m.maxY - inset - p.y) / (m.height - inset)
             case .left: size = (p.x - m.minX - inset) / (m.width - inset)
             case .right: size = (m.maxX - inset - p.x) / (m.width - inset)
@@ -1185,7 +1201,7 @@ final class Drawer {
             guard let target = l.drawers[s.pair.id], let from = axFrame(s.window) else { continue }
             s.expected = target
             setSize(s.window, target.size)
-            s.parked = s.pair.edge == .bottom ? CGPoint(x: target.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: target.minY)
+            s.parked = s.pair.edge.vertical ? CGPoint(x: target.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: target.minY)
             let start = CGRect(origin: from.origin, size: target.size)
             s.resizer.request(s.window, start)
             let anim = Animator()

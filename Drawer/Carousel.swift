@@ -157,6 +157,7 @@ final class CarouselController {
         switch edge {
         case .left: return frame.offsetBy(dx: -gap, dy: 0)
         case .right: return frame.offsetBy(dx: gap, dy: 0)
+        case .top: return frame.offsetBy(dx: 0, dy: -gap)
         case .bottom: return frame.offsetBy(dx: 0, dy: gap)
         }
     }

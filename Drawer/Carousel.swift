@@ -94,10 +94,8 @@ final class CarouselController {
             else { bringIn(to, frame: frame, from: edge, done: finish) }
         }
         guard style.needsCapture, let pid = from?.processIdentifier else { plain(); return }
-        capture(pid: pid, frame: frame) { [weak self] current in
+        let run: (Transition) -> Void = { [weak self] overlay in
             guard let self else { return }
-            guard let current else { plain(); return }
-            let overlay = Transition(frame: frame, current: current)
             if style == .slideFade, !reversed {
                 // The picture stands in for the current app, so hide it as the next appears (one shadow, not two).
                 self.bringIn(to, frame: frame, from: edge, overlay: overlay, willShow: { from?.hide() }) { ok in
@@ -107,9 +105,8 @@ final class CarouselController {
                 return
             }
             // Played out in pictures over the spot: put the real window in place underneath first,
-            // then animate the pictures and lift them off.
-            // Hide the current app the moment the next one appears under the pictures, so the two windows'
-            // shadows never stack up (a darker, doubled shadow for a moment).
+            // then animate the pictures and lift them off. Hide the current app the moment the next one
+            // appears under the pictures, so the two windows' shadows never stack up.
             self.bringIn(to, frame: frame, from: edge, animated: false, willShow: { from?.hide() }) { ok in
                 guard ok else { from?.unhide(); overlay.close(); finish(false); return }
                 let play: (CGImage?) -> Void = { other in
@@ -121,6 +118,37 @@ final class CarouselController {
                     self.capture(pid: otherPid, frame: frame, done: play)
                 }
             }
+        }
+        // Styles that shrink or turn the pictures show what's really behind the spot around them (a picture
+        // of it without either app), never the live next window, which would ghost through.
+        let needsBehind = [CarouselStyle.push, .parallax, .flip].contains(style)
+        capture(pid: pid, frame: frame) { [weak self] current in
+            guard let self else { return }
+            guard let current else { plain(); return }
+            guard needsBehind else { run(Transition(frame: frame, current: current)); return }
+            self.captureBehind(frame: frame, hiding: [pid] + [running(to)?.processIdentifier].compactMap { $0 }) { behind in
+                run(Transition(frame: frame, current: current, behind: behind))
+            }
+        }
+    }
+
+    /// A picture of what's behind the spot with the carousel's apps left out: the wallpaper and other windows.
+    private func captureBehind(frame: CGRect, hiding pids: [pid_t], done: @escaping (CGImage?) -> Void) {
+        let finish: (CGImage?) -> Void = { img in DispatchQueue.main.async { done(img) } }
+        let me = ProcessInfo.processInfo.processIdentifier
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, _ in
+            guard let content,
+                  let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) })
+            else { finish(nil); return }
+            let skip = content.applications.filter { pids.contains($0.processID) || $0.processID == me }
+            let filter = SCContentFilter(display: display, excludingApplications: skip, exceptingWindows: [])
+            let cfg = SCStreamConfiguration()
+            let scale = CGFloat(filter.pointPixelScale)
+            cfg.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+            cfg.width = Int(frame.width * scale)
+            cfg.height = Int(frame.height * scale)
+            cfg.showsCursor = false
+            SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg) { img, _ in finish(img) }
         }
     }
 
@@ -247,8 +275,12 @@ final class Transition {
     private let currentImage: CGImage
     private let animator = Animator()
 
-    init(frame: CGRect, current image: CGImage) {   // frame in Accessibility (top-left) coordinates
+    private let behind: CGImage?
+
+    /// `behind`: a picture of what's behind the spot without the apps, shown around shrunk or turned pictures.
+    init(frame: CGRect, current image: CGImage, behind: CGImage? = nil) {   // frame in Accessibility (top-left) coordinates
         currentImage = image
+        self.behind = behind
         let primaryH = NSScreen.screens[0].frame.height
         let r = NSRect(x: frame.minX, y: primaryH - frame.maxY, width: frame.width, height: frame.height)
         window = NSWindow(contentRect: r, styleMask: .borderless, backing: .buffered, defer: false)
@@ -351,14 +383,17 @@ final class Transition {
         configure(mask, outImage)
         dim.mask = mask
         outgoing.addSublayer(dim)
-        // Styles that shrink or turn the pictures need a backdrop, or the real window shows around them.
-        // It's only there mid-way: at the start and end the pictures fill the spot, and a backdrop behind
-        // their rounded corners and soft edges would show as a dark rim.
-        let backdrop = CALayer()
-        backdrop.frame = root.bounds
-        backdrop.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
-        backdrop.opacity = 0
-        if [.push, .parallax, .flip].contains(style) { root.insertSublayer(backdrop, at: 0) }
+        // Styles that shrink or turn the pictures need a solid backdrop, or the live next window shows
+        // through around them. What's really behind the spot looks natural (no dark rim at the rounded
+        // corners); failing that, a dark fill.
+        if [.push, .parallax, .flip].contains(style) {
+            let backdrop = CALayer()
+            if let behind { configure(backdrop, behind) } else {
+                backdrop.frame = root.bounds
+                backdrop.backgroundColor = NSColor(white: 0.08, alpha: 1).cgColor
+            }
+            root.insertSublayer(backdrop, at: 0)
+        }
         if style == .flip {
             var p = CATransform3DIdentity
             p.m34 = -1 / 1200
@@ -388,7 +423,6 @@ final class Transition {
         let step: (Double) -> Void = { p in
             let e = reversed ? 1 - p : p   // progress of the forward animation
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            backdrop.opacity = Float(sin(.pi * min(max(e, 0), 1)))
             switch style {
             case .carousel:
                 set(incoming, x: dir * w * (1 - e))

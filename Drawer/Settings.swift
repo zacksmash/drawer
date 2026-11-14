@@ -11,11 +11,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         if window == nil {
             let tabs = NSTabViewController()
             tabs.tabStyle = .toolbar
+            tabs.canPropagateSelectedChildViewControllerTitle = false   // keep "Drawer Settings", not each tab's (empty) title
             tabs.addTabViewItem(tab("Drawers", "rectangle.bottomhalf.filled", DrawersTab()))
             tabs.addTabViewItem(tab("Carousels", "square.stack.3d.forward.dottedline", CarouselsTab()))
             tabs.addTabViewItem(tab("General", "gearshape", GeneralTab()))
             let w = NSWindow(contentViewController: tabs)
             w.styleMask = [.titled, .closable]
+            w.title = "Drawer Settings"
             w.toolbarStyle = .preference
             w.isReleasedWhenClosed = false
             w.center()
@@ -130,7 +132,6 @@ struct DrawersTab: View {
 
 struct CarouselsTab: View {
     @EnvironmentObject var cfg: Config
-    @State private var canCapture = CGPreflightScreenCaptureAccess()
 
     var body: some View {
         Form {
@@ -181,31 +182,6 @@ struct CarouselsTab: View {
                 }
             }
             Section {
-                Picker("Animation", selection: Binding(get: { cfg.carouselStyle }, set: { style in
-                    cfg.carouselStyle = style
-                    if style.needsCapture, !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
-                    canCapture = CGPreflightScreenCaptureAccess()
-                })) {
-                    ForEach(CarouselStyle.allCases) { Text($0.label).tag($0) }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(cfg.carouselStyle.blurb).foregroundStyle(.secondary)
-                    if cfg.carouselStyle.needsCapture {
-                        if canCapture {
-                            Text("Uses Screen Recording to animate pictures of the windows.").foregroundStyle(.tertiary)
-                        } else {
-                            Label("Needs Screen Recording for Drawer; until then it uses Slide. Allow it, then quit and reopen Drawer.",
-                                  systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Button("Open Screen Recording Settings…") {
-                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                            }
-                        }
-                    }
-                }
-                .font(.callout)
-            }
-            .onAppear { canCapture = CGPreflightScreenCaptureAccess() }
-            Section {
             } footer: {
                 HStack(alignment: .top) {
                     Text("Apps in a carousel take turns in the same spot. While one is in front, \(cfg.shortcut(for: .right).display) slides in the next and \(cfg.shortcut(for: .left).display) the previous, wrapping around. Move or resize whichever is showing and the rest follow.")
@@ -216,7 +192,7 @@ struct CarouselsTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: min(720, 210 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
+        .frame(width: 540, height: min(680, 140 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
     }
 
     /// Why part of this carousel won't work as expected, if so.

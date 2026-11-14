@@ -27,43 +27,6 @@ struct Pair: Codable, Identifiable, Equatable {
     var tiles: Bool { shrinkMain && !isFull }
 }
 
-/// How a carousel moves from one app to the next.
-enum CarouselStyle: String, CaseIterable, Identifiable {
-    case slide, slideFade, carousel, push, parallax, zoom, crossfade, flip
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .slide: "Slide"
-        case .slideFade: "Slide and fade"
-        case .carousel: "Carousel"
-        case .push: "Push"
-        case .parallax: "Parallax"
-        case .zoom: "Zoom"
-        case .crossfade: "Crossfade"
-        case .flip: "Flip"
-        }
-    }
-
-    var blurb: String {
-        switch self {
-        case .slide: "The next app slides in a little way over the current one."
-        case .slideFade: "Like Slide, while the current app fades away."
-        case .carousel: "The next app slides all the way across, covering the current one, which stays still."
-        case .push: "Both apps shrink into cards and travel side by side, the next pushing the current one out."
-        case .parallax: "The next app slides over while the current one sinks back: slower, smaller and darker."
-        case .zoom: "The current app shrinks away and fades, revealing the next."
-        case .crossfade: "The current app dissolves into the next."
-        case .flip: "The spot flips over like a card to the next app."
-        }
-    }
-
-    /// Animates pictures of the windows, so it needs Screen Recording.
-    var needsCapture: Bool { self != .slide }
-    /// Needs a picture of the incoming window too, not only the outgoing one.
-    var needsIncoming: Bool { [.carousel, .push, .parallax, .flip].contains(self) }
-}
-
 /// Apps that take turns in one spot: the main app's window. fn⌃. / fn⌃, cycle through them.
 struct Carousel: Codable, Identifiable, Equatable {
     var id = UUID()
@@ -135,7 +98,6 @@ final class Config: ObservableObject {
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
     @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // shortcuts act on the app under the pointer
     @Published var openInDrawer: Bool { didSet { d.set(openInDrawer, forKey: "openInDrawer") } }   // switching to a drawer app opens its drawer
-    @Published var carouselStyle: CarouselStyle { didSet { d.set(carouselStyle.rawValue, forKey: "carouselStyle") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -155,8 +117,6 @@ final class Config: ObservableObject {
         carousels = load("carousels") ?? []
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
-        carouselStyle = (d.string(forKey: "carouselStyle")).flatMap(CarouselStyle.init(rawValue:))
-            ?? (d.bool(forKey: "carouselFade") ? .slideFade : .slide)   // the earlier fade toggle
         hoverTarget = d.object(forKey: "hoverTarget") as? Bool ?? true
         openInDrawer = d.object(forKey: "openInDrawer") as? Bool ?? true
     }

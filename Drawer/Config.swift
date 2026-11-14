@@ -25,15 +25,15 @@ struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
 
-    /// fn⌃ + key: S (left), D (bottom), G (right) sit under the left hand in a row.
+    /// fn⌃ + key: , (left), D (bottom), . (right).
     static func fnControl(_ key: Int) -> Shortcut {
         Shortcut(keyCode: key, flags: CGEventFlags([.maskControl, .maskSecondaryFn]).rawValue)
     }
     static func `default`(for edge: Edge) -> Shortcut {
         switch edge {
-        case .left: return fnControl(kVK_ANSI_S)
+        case .left: return fnControl(kVK_ANSI_Comma)
         case .bottom: return fnControl(kVK_ANSI_D)
-        case .right: return fnControl(kVK_ANSI_G)
+        case .right: return fnControl(kVK_ANSI_Period)
         }
     }
     static let modifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand, .maskSecondaryFn]

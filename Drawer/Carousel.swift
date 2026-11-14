@@ -82,7 +82,7 @@ final class CarouselController {
     func endPeek() {
         guard let l = last else { return }
         if busy.contains(l.carousel) {
-            if let s = sliding, s.carousel == l.carousel {   // still sliding in: turn straight back from here
+            if let s = sliding, s.carousel == l.carousel {   // still sliding in: just drop it
                 animator.stop()
                 sliding = nil
                 last = nil
@@ -119,38 +119,27 @@ final class CarouselController {
         else { bringIn(to, frame: frame, from: edge, carousel: cid, done: finish) }
     }
 
-    /// Backwards: `to` goes back in the spot underneath, and `app`'s window backs out toward `edge`
-    /// and disappears, revealing it.
+    /// Peek let go: `to` is back in the spot (it stayed underneath) and `app` simply disappears.
     private func backOut(_ app: NSRunningApplication?, to: String, frame: CGRect, toward edge: Edge,
                          done: @escaping (Bool) -> Void) {
         guard let app, let w = axWindow(app), let back = running(to), let bw = axWindow(back) else {
             bringIn(to, frame: frame, from: edge, animated: false, done: done); return
         }
-        if underneath?.processIdentifier == back.processIdentifier, !back.isHidden {
-            underneath = nil   // still right there under the peeked window
-        } else {
+        if back.isHidden {
             setFrame(bw, frame)   // while still hidden
             back.unhide()
-            AXUIElementPerformAction(w, kAXRaiseAction as CFString)   // keep the peeked window on top of it
         }
         retreat(w, app: app, to: entryFrame(frame, from: edge), home: frame, revealing: back) { done(true) }
     }
 
-    /// Move `w` straight back from wherever it is to `to`, hide its app, and leave `revealing` in front.
+    /// Peek let go: hide the peeked app on the spot (no animation), leaving `back` in front.
     private func retreat(_ w: AXUIElement, app: NSRunningApplication, to: CGRect, home: CGRect,
                          revealing back: NSRunningApplication?, done: @escaping () -> Void) {
-        let here = axFrame(w) ?? home
-        let total = max(abs(home.minX - to.minX) + abs(home.minY - to.minY), 1)
-        let left = abs(here.minX - to.minX) + abs(here.minY - to.minY)
-        animator.run(duration: max(0.06, 0.2 * Double(left / total)), curve: glide, step: { e in
-            setPos(w, lerp(here, to, e).origin)
-        }) { [weak self] in
-            if let back, let bw = axWindow(back) { bringToFront(back, bw) }
-            app.hide()
-            setFrame(w, home)   // back in place for next time
-            self?.underneath = nil
-            done()
-        }
+        if let back, let bw = axWindow(back) { bringToFront(back, bw) }
+        app.hide()
+        setFrame(w, home)   // in place for next time
+        underneath = nil
+        done()
     }
 
     /// Where the incoming window starts: one tile gap out on that side, so it barely moves outside the spot.

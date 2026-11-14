@@ -857,12 +857,18 @@ final class Drawer {
                   let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.appActivated(app)
         }
-        // Quitting an app with a dragged-out drawer window closes that window too.
+        // A drawer app quit: its drawers are gone, so give their space back to the main window right away
+        // (its windows vanish without a close notification). Quitting with a dragged-out drawer window
+        // closes that window too.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            guard let self, let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
-                  let p = self.popped[id] else { return }
-            self.forgetMovedSpot(p)
+            guard let self, let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            else { return }
+            for st in self.stages.values { for s in st.sessions where s.pair.drawerID == id { self.close(s.pair.id, raise: false) } }
+            for p in self.pending.keys where Config.shared.pairs.first(where: { $0.id == p })?.drawerID == id {
+                self.pending.removeValue(forKey: p)?.invalidate()
+            }
+            if let p = self.popped[id] { self.forgetMovedSpot(p) }
         }
     }
 
@@ -1143,7 +1149,11 @@ final class Drawer {
         s.stopWatching()
         let app = running(s.pair.drawerID)
         if axFrame(s.window) == nil, let app, let w = axWindow(app) { s.adopt(w, app: app) }   // its window was swapped
-        guard let f = axFrame(s.window) else { app?.hide(); finishStage(st, after); return }
+        guard let f = axFrame(s.window) else {   // its window is gone (closed, or the app quit)
+            app?.hide()
+            growBack(st, to: after)
+            return
+        }
         let parked = CGRect(origin: s.parked, size: f.size)
         let others = st.sessions
         let wasFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -1182,6 +1192,19 @@ final class Drawer {
     }
 
     /// Settle a stage on `layout`, and forget it if no drawers are left.
+    /// A drawer vanished without sliding out (its window closed or its app quit): ease the main window and the
+    /// other drawers into the space it left, then finish up.
+    private func growBack(_ st: Stage, to after: StageLayout) {
+        guard let mw = st.mainWindow, let from = axFrame(mw) else { finishStage(st, after); return }
+        let target = st.sessions.isEmpty ? st.area : after.main
+        guard from != target else { finishStage(st, after); return }
+        st.animator.stop()
+        st.quietUntil = .infinity
+        st.animator.run(duration: 0.24, curve: easeOutCubic, step: { e in st.setMain(lerp(from, target, e)) }) { [weak self] in
+            self?.finishStage(st, after)
+        }
+    }
+
     private func finishStage(_ st: Stage, _ layout: StageLayout) {
         st.setMain(st.sessions.isEmpty ? st.area : layout.main)
         for o in st.sessions { if let b = layout.drawers[o.pair.id] { o.expected = b; o.resizer.request(o.window, b) } }

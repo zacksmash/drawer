@@ -96,6 +96,7 @@ final class Config: ObservableObject {
     @Published var carousels: [Carousel] { didSet { store(carousels, "carousels") } }
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
+    @Published var carouselFade: Bool { didSet { d.set(carouselFade, forKey: "carouselFade") } }   // needs Screen Recording
 
     private init() {
         let d = UserDefaults.standard
@@ -115,6 +116,7 @@ final class Config: ObservableObject {
         carousels = load("carousels") ?? []
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
+        carouselFade = d.object(forKey: "carouselFade") as? Bool ?? false
     }
 
     private func store<T: Encodable>(_ v: T, _ key: String) {

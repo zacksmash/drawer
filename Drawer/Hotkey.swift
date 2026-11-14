@@ -38,6 +38,7 @@ final class Hotkey {
 
     // Main-thread state.
     private var openedByPress: UUID?         // drawer this press opened, closed on release if it was a peek
+    private var cycledByPress = false        // this press cycled a carousel, undone on release if it was a peek
 
     func install() {
         startRefreshing()
@@ -185,7 +186,9 @@ final class Hotkey {
             if s.peek, CACurrentMediaTime() - start > peekThreshold {
                 DispatchQueue.main.async {   // held → it was a peek
                     if let id = self.openedByPress { drawer.close(id) }
+                    if self.cycledByPress { carousels.endPeek() }
                     self.openedByPress = nil
+                    self.cycledByPress = false
                 }
             }
             return true
@@ -202,8 +205,10 @@ final class Hotkey {
             if carousels.handles(front: front, shortcut: shortcut) {
                 carousels.cycle(front: front, shortcut: shortcut)   // ‹ / › in a carousel app
                 self.openedByPress = nil
+                self.cycledByPress = true
             } else {
                 self.openedByPress = drawer.toggle(shortcut)
+                self.cycledByPress = false
             }
             self.refresh()
         }

@@ -130,6 +130,7 @@ struct DrawersTab: View {
 
 struct CarouselsTab: View {
     @EnvironmentObject var cfg: Config
+    @State private var canCapture = CGPreflightScreenCaptureAccess()
 
     var body: some View {
         Form {
@@ -180,6 +181,24 @@ struct CarouselsTab: View {
                 }
             }
             Section {
+                Toggle(isOn: Binding(get: { cfg.carouselFade }, set: { on in
+                    cfg.carouselFade = on
+                    if on, !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+                    canCapture = CGPreflightScreenCaptureAccess()
+                })) {
+                    Text("Fade out the app being replaced")
+                    Text(cfg.carouselFade && !canCapture
+                         ? "Needs Screen Recording for Drawer (to picture the window as it fades). Allow it, then quit and reopen Drawer."
+                         : "Uses Screen Recording to picture the outgoing window as it fades.")
+                }
+                if cfg.carouselFade && !canCapture {
+                    Button("Open Screen Recording Settings…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                    }
+                }
+            }
+            .onAppear { canCapture = CGPreflightScreenCaptureAccess() }
+            Section {
             } footer: {
                 HStack(alignment: .top) {
                     Text("Apps in a carousel take turns in the same spot. While one is in front, \(cfg.shortcut(for: .right).display) slides in the next and \(cfg.shortcut(for: .left).display) the previous, wrapping around. Move or resize whichever is showing and the rest follow.")
@@ -190,7 +209,7 @@ struct CarouselsTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: min(680, 140 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
+        .frame(width: 540, height: min(720, 210 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
     }
 
     /// Why part of this carousel won't work as expected, if so.
@@ -517,7 +536,7 @@ struct GeneralTab: View {
                 }
                 Toggle(isOn: $cfg.peek) {
                     Text("Hold to peek")
-                    Text("Hold the shortcut to show the drawer, and release to hide it.")
+                    Text("Hold the shortcut to show the drawer or the next carousel app, and release to go back.")
                 }
             }
 

@@ -3,13 +3,15 @@ import Carbon.HIToolbox
 
 /// Which side of the main window the drawer slides in from.
 enum Edge: String, Codable, CaseIterable, Identifiable {
-    case left, top, bottom, right   // display order
+    case bottom, left, right
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
-    /// Slides in vertically (top or bottom) rather than from the side.
-    var vertical: Bool { self == .top || self == .bottom }
-    /// Which edge a new drawer gets first.
-    static let preferred: [Edge] = [.bottom, .left, .right, .top]
+
+    /// An edge this version doesn't know (top drawers were tried and removed) becomes the bottom one,
+    /// rather than failing to load every drawer.
+    init(from decoder: Decoder) throws {
+        self = Edge(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .bottom
+    }
 }
 
 /// One main app + the drawer app that slides over (or beside) it.
@@ -18,7 +20,7 @@ struct Pair: Codable, Identifiable, Equatable {
     var mainID: String
     var drawerID: String
     var edge: Edge = .bottom
-    var size: Double = 0.5          // share of the main window's height (top/bottom) or width (left/right)
+    var size: Double = 0.5          // share of the main window's height (bottom) or width (left/right)
     var shrinkMain: Bool = false    // tile next to the main window instead of overlaying it
     var shortcut: Shortcut?         // nil = use the edge's shortcut
     var previousSize: Double?       // size before the last edge drag (double-clicking the edge goes back)
@@ -67,14 +69,13 @@ struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
 
-    /// fn⌃ + key: , (left), X (top), D (bottom), . (right).
+    /// fn⌃ + key: , (left), D (bottom), . (right).
     static func fnControl(_ key: Int) -> Shortcut {
         Shortcut(keyCode: key, flags: CGEventFlags([.maskControl, .maskSecondaryFn]).rawValue)
     }
     static func `default`(for edge: Edge) -> Shortcut {
         switch edge {
         case .left: return fnControl(kVK_ANSI_Comma)
-        case .top: return fnControl(kVK_ANSI_X)
         case .bottom: return fnControl(kVK_ANSI_D)
         case .right: return fnControl(kVK_ANSI_Period)
         }

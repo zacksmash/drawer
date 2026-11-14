@@ -113,7 +113,7 @@ struct DrawersTab: View {
 
     private func freeEdge(for main: String) -> Edge? {
         let used = Set(cfg.pairs.filter { $0.mainID == main }.map(\.edge))
-        return Edge.preferred.first { !used.contains($0) }
+        return Edge.allCases.first { !used.contains($0) }
     }
 
     /// Why this drawer clashes with another one on the same main app, if it does.
@@ -335,7 +335,7 @@ struct DrawerEditor: View {
         .frame(width: 480, height: 720)
         .onChange(of: draft.mainID) { _, _ in
             // Moved to a main app where this edge is taken: pick a free one.
-            if takenEdges.contains(draft.edge), let free = Edge.preferred.first(where: { !takenEdges.contains($0) }) {
+            if takenEdges.contains(draft.edge), let free = Edge.allCases.first(where: { !takenEdges.contains($0) }) {
                 draft.edge = free
             }
         }
@@ -419,7 +419,6 @@ struct LayoutPreview: View {
     private func visibleMain(_ m: CGRect, _ d: CGRect) -> CGRect {
         guard !pair.tiles else { return m }
         switch pair.edge {
-        case .top: return CGRect(x: m.minX, y: d.maxY, width: m.width, height: m.maxY - d.maxY)
         case .bottom: return CGRect(x: m.minX, y: m.minY, width: m.width, height: d.minY - m.minY)
         case .left: return CGRect(x: d.maxX, y: m.minY, width: m.maxX - d.maxX, height: m.height)
         case .right: return CGRect(x: m.minX, y: m.minY, width: d.minX - m.minX, height: m.height)
@@ -430,9 +429,6 @@ struct LayoutPreview: View {
         if pair.isFull { return CGRect(x: 0, y: 0, width: w, height: h) }
         let inset: CGFloat = pair.tiles ? 0 : 6
         switch pair.edge {
-        case .top:
-            let dh = (h - gap) * pair.size
-            return CGRect(x: inset, y: inset, width: w - 2 * inset, height: dh)
         case .bottom:
             let dh = (h - gap) * pair.size
             return CGRect(x: inset, y: h - dh - inset, width: w - 2 * inset, height: dh)
@@ -449,7 +445,6 @@ struct LayoutPreview: View {
         guard pair.tiles else { return CGRect(x: 0, y: 0, width: w, height: h) }
         let d = drawerRect(w, h, gap)
         switch pair.edge {
-        case .top: return CGRect(x: 0, y: d.maxY + gap, width: w, height: h - d.maxY - gap)
         case .bottom: return CGRect(x: 0, y: 0, width: w, height: d.minY - gap)
         case .left: return CGRect(x: d.maxX + gap, y: 0, width: w - d.maxX - gap, height: h)
         case .right: return CGRect(x: 0, y: 0, width: d.minX - gap, height: h)
@@ -516,7 +511,7 @@ struct GeneralTab: View {
     var body: some View {
         Form {
             Section("Keyboard") {
-                ForEach(Edge.allCases) { e in
+                ForEach([Edge.left, .bottom, .right]) { e in
                     LabeledContent("\(e.label) drawers") {
                         ShortcutRecorder(shortcut: Binding(get: { cfg.shortcut(for: e) }, set: { cfg.setShortcut($0, for: e) }),
                                          resetTo: .default(for: e))

@@ -893,7 +893,7 @@ final class Drawer {
         popped[pair.drawerID] = nil   // docking it again; no need to remember the moved spot
         // Start from the configured size every time. A minimum learned earlier can be wrong (e.g. the window
         // was tiled by macOS, which holds its size for a moment), and it would otherwise stick for good.
-        minSizes[pair.drawerID] = nil
+        let knownMin = minSizes.removeValue(forKey: pair.drawerID)
         let started = CACurrentMediaTime()
         var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?
@@ -945,6 +945,8 @@ final class Drawer {
                 if isMinimized(w) || (!app.isHidden && onCurrentSpace(app) && axFrame(w).map { near($0, self.openFrame(pair)) } == true) {
                     t.invalidate()
                     self.pending[pair.id] = nil
+                    // No slide to find its minimum size on the way in, so trust the one learned before.
+                    if let knownMin, minSizes[pair.drawerID] == nil { minSizes[pair.drawerID] = knownMin }
                     self.present(pair, app: app, window: w, inPlace: true)
                     return
                 }
@@ -1032,8 +1034,16 @@ final class Drawer {
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
         if inPlace {
-            let after = st.layout()
-            guard let open = after.drawers[pair.id] else { return }
+            var after = st.layout()
+            guard var open = after.drawers[pair.id] else { return }
+            if isMinimized(w) {
+                setFrame(w, open)
+                // It may not go that small: fit to what it kept, so the genie lands on the final spot.
+                if probeMinSize(pair.drawerID, window: w, asked: open.size) {
+                    after = st.layout()
+                    open = after.drawers[pair.id] ?? open
+                }
+            }
             s.parked = closedFrame(open, edge: pair.edge).origin
             s.expected = open
             if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
@@ -1087,6 +1097,7 @@ final class Drawer {
                 } }
             }
         }) { [weak self, st, s] in
+            if !moving, let f = axFrame(w), !near(f, open) { setFrame(w, open) }   // the genie landed off the spot
             st.setMain(after.main)
             for o in others { if let b = after.drawers[o.pair.id] { o.expected = b; o.resizer.request(o.window, b) } }
             bringToFront(app, w)   // in case another app grabbed focus mid-slide

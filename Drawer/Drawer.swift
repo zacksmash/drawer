@@ -711,6 +711,13 @@ final class Drawer {
                 self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab
             }
         }
+        // Switching to a drawer app opens it in its drawer.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
+                  let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.appActivated(app)
+        }
         // Quitting an app with a dragged-out drawer window closes that window too.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
@@ -718,6 +725,29 @@ final class Drawer {
                   let p = self.popped[id] else { return }
             self.forgetMovedSpot(p)
         }
+    }
+
+    /// The user switched to `app` (Dock, ⌘-Tab, launching it…). If it's a drawer app, open it in its drawer
+    /// instead of wherever its window would go; if it's in a carousel, put it in the carousel's spot.
+    /// Clicking its own window, or a window dragged out of a drawer, leaves it where it is.
+    private func appActivated(_ app: NSRunningApplication) {
+        guard Config.shared.openInDrawer, let id = app.bundleIdentifier, popped[id] == nil else { return }
+        if NSEvent.pressedMouseButtons & 1 != 0, appUnderPointer() == id { return }   // clicked its window
+        if carousels.adopt(app) { return }
+        // Already showing (or on its way) in a drawer.
+        if stages.values.contains(where: { $0.sessions.contains { $0.pair.drawerID == id } }) { return }
+        if Config.shared.pairs.contains(where: { $0.drawerID == id && pending[$0.id] != nil }) { return }
+        let pairs = Config.shared.pairs.filter { p in
+            p.drawerID == id &&
+                running(p.mainID).map { !$0.isHidden && axWindow($0) != nil } == true
+        }
+        guard !pairs.isEmpty else { return }
+        // Several main apps: the one whose window is nearest the front.
+        let pids = Set(pairs.compactMap { running($0.mainID)?.processIdentifier })
+        let front = frontmostWindowOwner(among: pids)
+        let pair = pairs.first { running($0.mainID)?.processIdentifier == front } ?? pairs[0]
+        for st in stages.values { for s in st.sessions where s.pair.drawerID == id { detach(st, s, hide: true) } }
+        show(pair)
     }
 
     /// A dragged-out drawer window closed: make its app reopen it in the drawer spot, not where it was moved to.

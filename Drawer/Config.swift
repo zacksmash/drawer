@@ -97,6 +97,7 @@ final class Config: ObservableObject {
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
     @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // shortcuts act on the app under the pointer
+    @Published var openInDrawer: Bool { didSet { d.set(openInDrawer, forKey: "openInDrawer") } }   // switching to a drawer app opens its drawer
     @Published var carouselFade: Bool { didSet { d.set(carouselFade, forKey: "carouselFade") } }   // needs Screen Recording
 
     private init() {
@@ -119,6 +120,7 @@ final class Config: ObservableObject {
         peek = d.object(forKey: "peek") as? Bool ?? true
         carouselFade = d.object(forKey: "carouselFade") as? Bool ?? false
         hoverTarget = d.object(forKey: "hoverTarget") as? Bool ?? true
+        openInDrawer = d.object(forKey: "openInDrawer") as? Bool ?? true
     }
 
     private func store<T: Encodable>(_ v: T, _ key: String) {
@@ -172,6 +174,16 @@ func appUnderPointer() -> String? {
               let b = w[kCGWindowBounds as String] as? NSDictionary,
               let r = CGRect(dictionaryRepresentation: b), r.contains(loc) else { continue }
         return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+    return nil
+}
+
+/// Of `pids`, the one owning the frontmost ordinary on-screen window, if any.
+func frontmostWindowOwner(among pids: Set<pid_t>) -> pid_t? {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    for w in list where (w[kCGWindowLayer as String] as? Int) == 0 {
+        if let pid = w[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid) { return pid }
     }
     return nil
 }

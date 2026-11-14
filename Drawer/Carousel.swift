@@ -39,6 +39,31 @@ final class CarouselController {
         swap(c.id, from: curApp, to: members[next], frame: frame, edge: forward ? .right : .left)
     }
 
+    /// The user switched to `app` itself (Dock, ⌘-Tab…). If it's in a carousel and another member is
+    /// showing, put it right in that member's spot and hide that one. Returns whether it did.
+    func adopt(_ app: NSRunningApplication) -> Bool {
+        guard let id = app.bundleIdentifier, let c = Config.shared.carousel(containing: id), !busy.contains(c.id) else { return false }
+        let others = c.members.filter { $0 != id }.compactMap(running).filter { !$0.isHidden }
+        guard let shown = frontmostWindowOwner(among: Set(others.map(\.processIdentifier))),
+              let other = others.first(where: { $0.processIdentifier == shown }) else { return false }
+        guard let frame = other.bundleIdentifier.flatMap({ drawer.releaseMain($0) }) ?? axWindow(other).flatMap(axFrame)
+        else { return false }
+        busy.insert(c.id)
+        // Its window may not exist yet (just launched): wait briefly for it.
+        let started = CACurrentMediaTime()
+        let t = Timer(timeInterval: 0.016, repeats: true) { [weak self] t in
+            guard CACurrentMediaTime() - started < 5 else { t.invalidate(); self?.busy.remove(c.id); return }
+            guard app.isFinishedLaunching, let w = axWindow(app) else { return }
+            t.invalidate()
+            setFrame(w, frame)
+            other.hide()
+            self?.busy.remove(c.id)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        t.fire()
+        return true
+    }
+
     /// The shortcut was held and let go: go back to the app that was showing before it was pressed.
     func endPeek() {
         guard let l = last else { return }

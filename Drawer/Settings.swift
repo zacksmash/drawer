@@ -534,6 +534,10 @@ struct GeneralTab: View {
                                          resetTo: .default(for: e))
                     }
                 }
+                Toggle(isOn: $cfg.openInDrawer) {
+                    Text("Open drawer apps in their drawer")
+                    Text("Switching to a drawer or carousel app from the Dock or ⌘-Tab puts it in its spot.")
+                }
                 Toggle(isOn: $cfg.hoverTarget) {
                     Text("Shortcuts act on the app under the pointer")
                     Text("Otherwise they act on the app in front.")

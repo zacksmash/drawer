@@ -14,6 +14,7 @@ final class Hotkey {
         var front: String?
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
+        var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
         var peek = true
     }
@@ -54,6 +55,7 @@ final class Hotkey {
         s.front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs)
         s.lockedFrames = drawer.lockedFrames
+        s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
@@ -125,6 +127,10 @@ final class Hotkey {
             let p = event.location   // global top-left coords, same as Accessibility
             blockingDrag = s.lockedFrames.contains { f in
                 f.insetBy(dx: -8, dy: -8).contains(p) && !f.insetBy(dx: 5, dy: 5).contains(p)
+            }
+            // A press on a main window with drawers might start dragging it: let Drawer watch for that.
+            if !blockingDrag, let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
+                DispatchQueue.main.async { drawer.mainPressed(hit.id) }
             }
             return blockingDrag
         case .leftMouseDragged:

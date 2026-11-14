@@ -166,6 +166,7 @@ final class Hotkey {
             // A drawer's traffic lights do Drawer things (⌥-click for the usual). Acts on release, like a button.
             if !event.flags.contains(.maskAlternate), let l = currentLights().first(where: { $0.rect.contains(p) }) {
                 pressedLight = l
+                if l.kind == .zoom { DispatchQueue.main.async { drawer.leaveButton(l.id) } }
                 return true
             }
             // The inner edge (facing the main window) resizes the drawer. Drawer does the resizing itself,

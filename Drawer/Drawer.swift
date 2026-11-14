@@ -575,8 +575,23 @@ final class Drawer {
             nudger.run(duration: 0.15, curve: glide, step: { e in setPos(w, lerp(start, end, e).origin) }) {
                 setPos(w, end.origin)
             }
-        case .zoom: toggleFull(id)
+        case .zoom:
+            toggleFull(id)
+            // Its window grows under the pointer, which may still rest on the button: keep its menu away.
+            for delay in [0.1, 0.3, 0.6] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { self.leaveButton(id) }
+            }
         }
+    }
+
+    /// The green button shows its tiling menu once the pointer rests on it, and a real click is what cancels
+    /// that. Drawer takes the click itself, so tell the app the pointer moved off to the middle of the window
+    /// instead. Only the app sees this; the real pointer doesn't move.
+    func leaveButton(_ id: UUID) {
+        guard let (_, s) = session(id), let app = running(s.pair.drawerID), let f = axFrame(s.window),
+              let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                              mouseCursorPosition: CGPoint(x: f.midX, y: f.midY), mouseButton: .left) else { return }
+        e.postToPid(app.processIdentifier)
     }
 
     private let nudger = Animator()

@@ -85,7 +85,7 @@ Change them under **General → Keyboard**, or give a single drawer its own shor
   - 🟡 lets it out as a normal window, with a little *pop*. The shortcut docks it again.
   - 🟢 switches between its size and Full.
 - **Drag a drawer out** by its title bar to use it as a normal window. Close it and it goes back to its drawer spot next time.
-- **Click the main app** to dismiss overlay drawers. **Move the main window** and its drawers hide instantly.
+- **Click the main window while it's focused** to dismiss overlay drawers. A click that just brings it forward (from the drawer or another app) leaves them open. **Move the main window** and its drawers hide instantly.
 - **Switching to a drawer app** from the Dock or <kbd>⌘</kbd><kbd>Tab</kbd> opens it in its drawer.
 
 ### Carousels

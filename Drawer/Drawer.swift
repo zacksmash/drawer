@@ -715,9 +715,11 @@ final class Drawer {
     /// The mouse went down on a main window that has drawers. If the window starts moving (a title-bar drag),
     /// drop its drawers on the spot. Checked every frame from the mouse rather than from move notifications,
     /// which apps can deliver late or only once the drag ends.
-    func mainPressed(_ mainID: String) {
+    /// `dismiss`: the main app was already in front, so the click means "done with the drawers". A click that
+    /// only brings the main window forward (from a drawer or another app) leaves them open, back on top.
+    func mainPressed(_ mainID: String, dismiss: Bool) {
         guard let st = stages[mainID], st.pressWatch == nil else { return }
-        dropFloating(st)   // a click on the main window covers floating drawers anyway: hide them now
+        if dismiss { dropFloating(st) }   // a click on the main window covers floating drawers anyway: hide them now
         guard stages[mainID] === st, let mw = st.mainWindow, let start = axFrame(mw) else { return }
         let t = Timer(timeInterval: 0.016, repeats: true) { [weak self, weak st] t in
             guard let self, let st, self.stages[st.mainID] === st, let now = axFrame(mw) else { t.invalidate(); st?.pressWatch = nil; return }
@@ -729,7 +731,14 @@ final class Drawer {
                 self.dropAll(st)
                 return
             }
-            if NSEvent.pressedMouseButtons & 1 == 0 { t.invalidate(); st.pressWatch = nil }   // just a click
+            if NSEvent.pressedMouseButtons & 1 == 0 {   // just a click
+                t.invalidate(); st.pressWatch = nil
+                // The main window came forward over its floating drawers: put them back on top of it,
+                // without taking focus from it.
+                if !dismiss { for s in st.sessions where s.docked && !s.pair.tiles {
+                    AXUIElementPerformAction(s.window, kAXRaiseAction as CFString)
+                } }
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         st.pressWatch = t
@@ -803,7 +812,8 @@ final class Drawer {
     }
 
     init() {
-        // Clicking (or switching to) the main app dismisses its floating drawers, which it would cover anyway.
+        // Switching to the main app (⌘-Tab) dismisses its floating drawers, which it would cover anyway. A click
+        // only does when the main app was already in front (see mainPressed).
         // Tiled drawers sit beside the main window, so they stay.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
@@ -811,7 +821,7 @@ final class Drawer {
                   let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
                   let st = self.stages[id] else { return }
             if NSEvent.pressedMouseButtons & 1 != 0 {
-                self.mainPressed(id)     // clicked (no-op if the event tap already handled the press)
+                self.mainPressed(id, dismiss: false)   // clicked from elsewhere (no-op if the event tap already handled the press)
             } else {
                 self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab
             }

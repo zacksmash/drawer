@@ -545,21 +545,21 @@ final class Drawer {
     }
 
     /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and
-    /// state), yellow lets it out as an ordinary window (with a pop, nudged down and inward), green switches between its
+    /// state), yellow lets it out as an ordinary window (with a pop and a small hop toward the middle of the screen), green switches between its
     /// size and Full.
     func trafficLight(_ kind: TrafficLight, of id: UUID) {
         guard let (st, s) = session(id), s.docked else { return }
         switch kind {
         case .close: close(id)
         case .minimize:
-            // Let it out with a pop, nudged down and in from the nearer side so it visibly comes loose.
+            // Let it out with a pop and a little diagonal hop toward the middle of the screen (where there's room).
             NSSound(named: "Pop")?.play()
             guard let start = axFrame(s.window) else { popOut(st, s); return }
-            let screenMid = screenFrame(containing: start).midX
-            let end = start.offsetBy(dx: start.midX < screenMid ? 40 : -40, dy: 40)
+            let screen = screenFrame(containing: start), hop: CGFloat = 8
+            let end = start.offsetBy(dx: start.midX < screen.midX ? hop : -hop, dy: start.midY > screen.midY ? -hop : hop)
             let w = s.window
             popOut(st, s)
-            nudger.run(duration: 0.25, curve: glide, step: { e in setPos(w, lerp(start, end, e).origin) }) {
+            nudger.run(duration: 0.15, curve: glide, step: { e in setPos(w, lerp(start, end, e).origin) }) {
                 setPos(w, end.origin)
             }
         case .zoom: toggleFull(id)

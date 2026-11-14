@@ -15,6 +15,7 @@ final class Hotkey {
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
+        var trafficLights: [(id: UUID, kind: TrafficLight, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
         var hoverTarget = true
@@ -32,6 +33,7 @@ final class Hotkey {
     private var blockingDrag = false
     private var resizing: UUID?              // drawer whose inner edge is being dragged
     private var resizeIsDoubleClick = false
+    private var pressedLight: (id: UUID, kind: TrafficLight, rect: CGRect)?   // a drawer's traffic light, mouse down
     private let peekThreshold = 0.35
     private var swipeX: Double = 0           // fn + horizontal scroll travel in the current gesture
     private var swipeFired = false           // this gesture already cycled
@@ -66,6 +68,7 @@ final class Hotkey {
         s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs).union(carousels.memberIDs)
         s.lockedFrames = drawer.lockedFrames
         s.resizeHandles = drawer.resizeHandles
+        s.trafficLights = drawer.trafficLights
         s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
         s.carouselFronts = carousels.memberIDs
@@ -138,6 +141,11 @@ final class Hotkey {
         case .scrollWheel: return swipe(event, s)
         case .leftMouseDown:
             let p = event.location   // global top-left coords, same as Accessibility
+            // A drawer's traffic lights do Drawer things (⌥-click for the usual). Acts on release, like a button.
+            if !event.flags.contains(.maskAlternate), let l = s.trafficLights.first(where: { $0.rect.contains(p) }) {
+                pressedLight = l
+                return true
+            }
             // The inner edge (facing the main window) resizes the drawer. Drawer does the resizing itself,
             // so the drawer and the main window move together and the app never fights it.
             if let h = s.resizeHandles.first(where: { $0.rect.contains(p) }) {
@@ -161,6 +169,7 @@ final class Hotkey {
             }
             return blockingDrag
         case .leftMouseDragged:
+            if pressedLight != nil { return true }
             if let id = resizing {
                 guard !resizeIsDoubleClick else { return true }
                 let p = event.location
@@ -169,6 +178,13 @@ final class Hotkey {
             }
             return blockingDrag
         case .leftMouseUp:
+            if let l = pressedLight {
+                pressedLight = nil
+                if l.rect.contains(event.location) {
+                    DispatchQueue.main.async { drawer.trafficLight(l.kind, of: l.id); self.refresh() }
+                }
+                return true
+            }
             if let id = resizing {
                 resizing = nil
                 guard !resizeIsDoubleClick else { return true }

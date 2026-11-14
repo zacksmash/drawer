@@ -27,6 +27,18 @@ struct Pair: Codable, Identifiable, Equatable {
     var tiles: Bool { shrinkMain && !isFull }
 }
 
+/// A window's close, minimize and zoom buttons.
+enum TrafficLight: CaseIterable {
+    case close, minimize, zoom
+    var attribute: String {
+        switch self {
+        case .close: kAXCloseButtonAttribute
+        case .minimize: kAXMinimizeButtonAttribute
+        case .zoom: kAXZoomButtonAttribute
+        }
+    }
+}
+
 /// Apps that take turns in one spot: the main app's window. fn⌃. / fn⌃, cycle through them.
 struct Carousel: Codable, Identifiable, Equatable {
     var id = UUID()

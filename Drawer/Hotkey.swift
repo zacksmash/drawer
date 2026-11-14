@@ -17,6 +17,7 @@ final class Hotkey {
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var floatingDrawers: [String: Set<String>] = [:]     // main app → apps of its open overlay drawers
+        var stageApps: Set<String> = []                      // main apps with drawers open + their drawer apps
         var shortcuts: [Shortcut] = []
         var hoverTarget = true
         var carouselFronts: Set<String> = []   // apps in a carousel (fn + swipe cycles them)
@@ -70,6 +71,7 @@ final class Hotkey {
         s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
         s.floatingDrawers = drawer.floatingDrawers
+        s.stageApps = drawer.openAppIDs
         s.shortcuts = Config.shared.allShortcuts
         s.carouselFronts = carousels.memberIDs
         s.hoverTarget = Config.shared.hoverTarget
@@ -165,6 +167,10 @@ final class Hotkey {
         case .scrollWheel: return swipe(event, s)
         case .leftMouseDown:
             let p = event.location   // global top-left coords, same as Accessibility
+            blockingDrag = false
+            // The drawer and main window frames only count where those windows actually are: not on another
+            // desktop (Space), and not under some other app's window.
+            guard !s.stageApps.isEmpty, let owner = appUnderPointer(), s.stageApps.contains(owner) else { return false }
             // A drawer's traffic lights do Drawer things (⌥-click for the usual). Acts on release, like a button.
             if !event.flags.contains(.maskAlternate), let l = currentLights().first(where: { $0.rect.contains(p) }) {
                 pressedLight = l
@@ -189,7 +195,7 @@ final class Hotkey {
             }
             // A press on a main window with drawers might start dragging it: let Drawer watch for that.
             if !blockingDrag, !s.lockedFrames.contains(where: { $0.contains(p) }),   // not on a drawer itself
-               let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
+               let hit = s.mainFrames.first(where: { $0.id == owner && $0.frame.contains(p) }) {
                 let from = s.front
                 // Coming back from another app to a main window with overlay drawers: take the click, and bring
                 // the drawers back on top with the main window just behind them. Letting the click through

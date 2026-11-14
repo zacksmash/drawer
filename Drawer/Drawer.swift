@@ -89,11 +89,16 @@ func setMinimized(_ w: AXUIElement, _ on: Bool) {
     AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, on ? kCFBooleanTrue : kCFBooleanFalse)
 }
 
-/// Whether any of the app's normal windows is on the current desktop (Space).
-func onCurrentSpace(_ app: NSRunningApplication) -> Bool {
+/// Whether `window` (of `app`) is on the current desktop. Matched by frame: some apps (TablePlus) keep thin
+/// helper windows on screen everywhere, so "the app has a window here" isn't enough.
+func onCurrentSpace(_ app: NSRunningApplication, window: AXUIElement) -> Bool {
+    guard let f = axFrame(window) else { return false }
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-    return list.contains { ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
-                           && ($0[kCGWindowLayer as String] as? Int) == 0 }
+    return list.contains { w in
+        guard (w[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier, (w[kCGWindowLayer as String] as? Int) == 0,
+              let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b) else { return false }
+        return abs(r.minX - f.minX) + abs(r.minY - f.minY) + abs(r.width - f.width) + abs(r.height - f.height) < 4
+    }
 }
 
 /// Same spot and size, give or take a few points.
@@ -958,7 +963,7 @@ final class Drawer {
                 }
                 // Minimised to the Dock, or just restored from it right into its drawer spot (clicked in the
                 // Dock): let the genie put it in place, no slide.
-                if isMinimized(w) || (!app.isHidden && onCurrentSpace(app) && axFrame(w).map { near($0, self.openFrame(pair)) } == true) {
+                if isMinimized(w) || (!app.isHidden && onCurrentSpace(app, window: w) && axFrame(w).map { near($0, self.openFrame(pair)) } == true) {
                     t.invalidate()
                     self.pending[pair.id] = nil
                     // No slide to find its minimum size on the way in, so trust the one learned before.
@@ -984,7 +989,7 @@ final class Drawer {
                     spaceMove = (m.window, now, true)
                     return
                 }
-                if !onCurrentSpace(app) {
+                if !onCurrentSpace(app, window: m.window) {
                     if now - m.at > 2 { t.invalidate(); self.pending[pair.id] = nil; self.warnOtherSpace(pair.drawerID) }
                     return
                 }
@@ -997,7 +1002,7 @@ final class Drawer {
             guard let w = axWindow(app) else { return }
             // The window is on another desktop. There's no public API to move it, but a window restored from
             // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
-            if !onCurrentSpace(app) {
+            if !onCurrentSpace(app, window: w) {
                 // A just-unhidden window can take a moment to show up as on-screen: give it a beat first.
                 if windowSeenAt == nil { windowSeenAt = CACurrentMediaTime() }
                 if CACurrentMediaTime() - windowSeenAt! < 0.3 { return }

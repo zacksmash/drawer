@@ -181,21 +181,28 @@ struct CarouselsTab: View {
                 }
             }
             Section {
-                Toggle(isOn: Binding(get: { cfg.carouselFade }, set: { on in
-                    cfg.carouselFade = on
-                    if on, !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+                Picker("Animation", selection: Binding(get: { cfg.carouselStyle }, set: { style in
+                    cfg.carouselStyle = style
+                    if style.needsCapture, !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
                     canCapture = CGPreflightScreenCaptureAccess()
                 })) {
-                    Text("Fade out the app being replaced")
-                    Text(cfg.carouselFade && !canCapture
-                         ? "Needs Screen Recording for Drawer (to picture the window as it fades). Allow it, then quit and reopen Drawer."
-                         : "Uses Screen Recording to picture the outgoing window as it fades.")
+                    ForEach(CarouselStyle.allCases) { Text($0.label).tag($0) }
                 }
-                if cfg.carouselFade && !canCapture {
-                    Button("Open Screen Recording Settings…") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(cfg.carouselStyle.blurb).foregroundStyle(.secondary)
+                    if cfg.carouselStyle.needsCapture {
+                        if canCapture {
+                            Text("Uses Screen Recording to animate pictures of the windows.").foregroundStyle(.tertiary)
+                        } else {
+                            Label("Needs Screen Recording for Drawer; until then it uses Slide. Allow it, then quit and reopen Drawer.",
+                                  systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            Button("Open Screen Recording Settings…") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                            }
+                        }
                     }
                 }
+                .font(.callout)
             }
             .onAppear { canCapture = CGPreflightScreenCaptureAccess() }
             Section {

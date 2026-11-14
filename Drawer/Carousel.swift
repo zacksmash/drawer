@@ -75,27 +75,49 @@ final class CarouselController {
         swap(l.carousel, from: cur, to: l.from, frame: frame, edge: l.forward ? .left : .right)
     }
 
-    /// Slide `to` in over `from` at `frame`, crossfading `from` out when allowed, then hide `from`.
+    /// Bring `to` in over `from` at `frame` in the chosen style, then hide `from`.
     private func swap(_ cid: UUID, from: NSRunningApplication?, to: String, frame: CGRect, edge: Edge) {
         busy.insert(cid)
-        snapshot(from, frame: frame) { [weak self] image in
+        var style = Config.shared.carouselStyle
+        if style.needsCapture, !CGPreflightScreenCaptureAccess() { style = .slide }
+        let finish: (Bool) -> Void = { [weak self] ok in
             guard let self else { return }
-            let overlay = image.map { FadeOverlay(image: $0, frame: frame) }
-            self.bringIn(to, frame: frame, from: edge, overlay: overlay) { ok in
-                if ok { from?.hide() }
-                overlay?.close()
-                self.busy.remove(cid)
-                if self.returnWanted { self.returnWanted = false; self.endPeek() }
+            if ok { from?.hide() }
+            self.busy.remove(cid)
+            if self.returnWanted { self.returnWanted = false; self.endPeek() }
+        }
+        guard style.needsCapture, let pid = from?.processIdentifier else {
+            bringIn(to, frame: frame, from: edge, done: finish)
+            return
+        }
+        capture(pid: pid, frame: frame) { [weak self] outgoing in
+            guard let self else { return }
+            guard let outgoing else { self.bringIn(to, frame: frame, from: edge, done: finish); return }
+            if style == .slideFade {
+                let overlay = Transition(frame: frame, outgoing: outgoing)
+                self.bringIn(to, frame: frame, from: edge, overlay: overlay) { ok in overlay.close(); finish(ok) }
+                return
+            }
+            // Everything else plays out in a picture over the spot: put the real window in place
+            // underneath first, then animate the pictures and lift them off.
+            let overlay = Transition(frame: frame, outgoing: outgoing)
+            self.bringIn(to, frame: frame, from: edge, animated: false) { ok in
+                guard ok else { overlay.close(); finish(false); return }
+                from?.hide()
+                let play: (CGImage?) -> Void = { incoming in
+                    overlay.play(style, from: edge, incoming: incoming) { overlay.close(); finish(true) }
+                }
+                guard style.needsIncoming, let inPid = running(to)?.processIdentifier else { play(nil); return }
+                // Give a just-shown window a moment to draw before picturing it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.capture(pid: inPid, frame: frame, done: play)
+                }
             }
         }
     }
 
-    /// A picture of `app`'s window, to fade out over the incoming one. Only with the fade turned on and
-    /// Screen Recording allowed; otherwise nil straight away.
-    private func snapshot(_ app: NSRunningApplication?, frame: CGRect, done: @escaping (CGImage?) -> Void) {
-        guard Config.shared.carouselFade, CGPreflightScreenCaptureAccess(), let pid = app?.processIdentifier else {
-            done(nil); return
-        }
+    /// A picture of `pid`'s window at `frame` (Screen Recording), or nil.
+    private func capture(pid: pid_t, frame: CGRect, done: @escaping (CGImage?) -> Void) {
         let finish: (CGImage?) -> Void = { img in DispatchQueue.main.async { done(img) } }
         SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, _ in
             func off(_ r: CGRect) -> CGFloat { abs(r.minX - frame.minX) + abs(r.minY - frame.minY) + abs(r.width - frame.width) }
@@ -124,12 +146,13 @@ final class CarouselController {
         }
     }
 
-    /// Launch or unhide `id`, park its window just off-screen on `edge` at `frame`'s size, then slide it in.
-    private func bringIn(_ id: String, frame: CGRect, from edge: Edge, overlay: FadeOverlay? = nil,
-                         done: @escaping (Bool) -> Void) {
+    /// Launch or unhide `id`, park its window just outside the spot on `edge`, then slide it in
+    /// (fading `overlay` out meanwhile). Not `animated`: put it straight in the spot and in front.
+    private func bringIn(_ id: String, frame: CGRect, from edge: Edge, overlay: Transition? = nil,
+                         animated: Bool = true, done: @escaping (Bool) -> Void) {
         let started = CACurrentMediaTime()
         var parked = false, reopened = false
-        let closed = entryFrame(frame, from: edge)
+        let closed = animated ? entryFrame(frame, from: edge) : frame
         if running(id) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { done(false); return }
             let conf = NSWorkspace.OpenConfiguration()
@@ -163,13 +186,19 @@ final class CarouselController {
             if app.isHidden { app.unhide(); return }
             guard let w = axWindow(app) else { return }
             t.invalidate()
+            guard animated else {
+                setFrame(w, frame)
+                bringToFront(app, w)
+                done(true)
+                return
+            }
             setSize(w, frame.size)
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
             let began = CACurrentMediaTime()
             self.animator.run(duration: 0.4, curve: easeOutBack, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
-                overlay?.alpha = 1 - min((CACurrentMediaTime() - began) / 0.25, 1)
+                overlay?.fadeOut(min((CACurrentMediaTime() - began) / 0.25, 1))
             }) {
                 setFrame(w, frame)
                 bringToFront(app, w)
@@ -181,32 +210,130 @@ final class CarouselController {
     }
 }
 
-/// A borderless picture of the outgoing window sitting over it, faded out to crossfade into the next app.
-/// (Other apps' windows can't be made see-through directly.)
-final class FadeOverlay {
+/// Pictures of the outgoing (and incoming) windows in a borderless window over the spot, animated
+/// with Core Animation and clipped to the spot. Other apps' windows can only be moved, so anything
+/// else (fading, scaling, flipping, staying inside the spot) is played out on pictures of them.
+final class Transition {
     private let window: NSWindow
+    private let root = CALayer()
+    private let outgoing = CALayer()
+    private let dim = CALayer()
+    private let animator = Animator()
 
-    init(image: CGImage, frame: CGRect) {   // frame in Accessibility (top-left) coordinates
+    init(frame: CGRect, outgoing image: CGImage) {   // frame in Accessibility (top-left) coordinates
         let primaryH = NSScreen.screens[0].frame.height
         let r = NSRect(x: frame.minX, y: primaryH - frame.maxY, width: frame.width, height: frame.height)
         window = NSWindow(contentRect: r, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = true
+        window.hasShadow = false
         window.level = .floating
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
-        let view = NSImageView(frame: NSRect(origin: .zero, size: r.size))
-        view.image = NSImage(cgImage: image, size: r.size)
-        view.imageScaling = .scaleAxesIndependently
+        let view = NSView(frame: NSRect(origin: .zero, size: r.size))
+        view.wantsLayer = true
         window.contentView = view
+        let scale = window.backingScaleFactor
+        root.frame = view.bounds
+        root.masksToBounds = true
+        view.layer?.addSublayer(root)
+        configure(outgoing, image, scale)
+        // Darkening that follows the window's shape (its rounded corners stay clear).
+        dim.frame = root.bounds
+        dim.backgroundColor = NSColor.black.cgColor
+        dim.opacity = 0
+        let mask = CALayer()
+        configure(mask, image, scale)
+        dim.mask = mask
+        outgoing.addSublayer(dim)
+        root.addSublayer(outgoing)
         window.orderFrontRegardless()
     }
 
-    var alpha: Double {
-        get { window.alphaValue }
-        set { window.alphaValue = newValue }
+    private func configure(_ l: CALayer, _ image: CGImage, _ scale: CGFloat) {
+        l.frame = root.bounds
+        l.contents = image
+        l.contentsGravity = .resize
+        l.contentsScale = scale
+    }
+
+    /// For Slide and fade: the picture of the outgoing window fades as the real next one slides in.
+    func fadeOut(_ p: Double) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        outgoing.opacity = Float(1 - p)
+        CATransaction.commit()
+    }
+
+    /// Play `style`, the incoming app coming from `edge`. The real incoming window already sits in the spot
+    /// underneath, so wherever the pictures leave a gap it shows through.
+    func play(_ style: CarouselStyle, from edge: Edge, incoming image: CGImage?, done: @escaping () -> Void) {
+        let w = root.bounds.width
+        let dir: CGFloat = edge == .left ? -1 : 1   // the side the incoming app comes from
+        let incoming = CALayer()
+        if let image {
+            configure(incoming, image, window.backingScaleFactor)
+            incoming.shadowColor = NSColor.black.cgColor
+            incoming.shadowOpacity = 0.3
+            incoming.shadowRadius = 14
+            incoming.shadowOffset = .zero
+            incoming.shadowPath = CGPath(roundedRect: root.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            root.addSublayer(incoming)
+        } else if style.needsIncoming {
+            // No picture of the incoming window: just fade the outgoing one off it.
+            return play(.crossfade, from: edge, incoming: nil, done: done)
+        }
+        func set(_ l: CALayer, x: CGFloat = 0, scale s: CGFloat = 1, rotate: CGFloat = 0, opacity: Double = 1) {
+            var t = CATransform3DMakeTranslation(x, 0, 0)
+            t = CATransform3DScale(t, s, s, 1)
+            if rotate != 0 { t = CATransform3DRotate(t, rotate, 0, 1, 0) }
+            l.transform = t
+            l.opacity = Float(opacity)
+        }
+        let (duration, curve): (Double, (Double) -> Double) = switch style {
+        case .carousel, .push, .parallax: (0.42, easeOutBack)
+        case .zoom: (0.32, easeOutCubic)
+        case .crossfade, .slide, .slideFade: (0.25, { $0 })
+        case .flip: (0.5, cubicBezier(0.45, 0, 0.55, 1))
+        }
+        if style == .flip {
+            var p = CATransform3DIdentity
+            p.m34 = -1 / 1200
+            root.sublayerTransform = p
+            root.backgroundColor = NSColor(white: 0.08, alpha: 0.9).cgColor
+            incoming.isHidden = true
+        }
+        let step: (Double) -> Void = { [self] e in
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            switch style {
+            case .carousel:
+                set(incoming, x: dir * w * (1 - e))
+                outgoing.isHidden = e >= 1   // overshooting: the real window shows on the far side, not the old picture
+            case .push:
+                set(incoming, x: dir * w * (1 - e))
+                set(outgoing, x: -dir * w * e)
+            case .parallax:
+                set(incoming, x: dir * w * (1 - e))
+                set(outgoing, x: -dir * w * 0.3 * e, scale: 1 - 0.05 * min(e, 1))
+                dim.opacity = Float(0.35 * min(e, 1))
+            case .zoom:
+                set(outgoing, scale: 1 - 0.15 * e, opacity: 1 - e)
+            case .crossfade, .slide, .slideFade:
+                set(outgoing, opacity: 1 - e)
+            case .flip:
+                let half = CGFloat.pi / 2
+                if e < 0.5 {
+                    set(outgoing, rotate: -dir * half * e * 2)
+                } else {
+                    outgoing.isHidden = true
+                    incoming.isHidden = false
+                    set(incoming, rotate: dir * half * (1 - (e - 0.5) * 2))
+                }
+            }
+            CATransaction.commit()
+        }
+        step(0)
+        animator.run(duration: duration, curve: curve, step: step, done: done)
     }
 
     func close() { window.orderOut(nil) }

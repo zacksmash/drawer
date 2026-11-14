@@ -115,7 +115,7 @@ final class CarouselController {
     /// Peek let go: `to` comes back in the spot and `app` simply disappears (no animation).
     private func backOut(_ app: NSRunningApplication?, to: String, frame: CGRect, toward edge: Edge,
                          done: @escaping (Bool) -> Void) {
-        guard let app, let w = axWindow(app), let back = running(to), let bw = axWindow(back) else {
+        guard let app, let w = axWindow(app), let back = running(to), axWindow(back) != nil else {
             bringIn(to, frame: frame, from: edge, animated: false, done: done); return
         }
         retreat(w, app: app, to: entryFrame(frame, from: edge), home: frame, revealing: back) { done(true) }

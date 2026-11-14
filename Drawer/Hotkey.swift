@@ -129,7 +129,8 @@ final class Hotkey {
                 f.insetBy(dx: -8, dy: -8).contains(p) && !f.insetBy(dx: 5, dy: 5).contains(p)
             }
             // A press on a main window with drawers might start dragging it: let Drawer watch for that.
-            if !blockingDrag, let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
+            if !blockingDrag, !s.lockedFrames.contains(where: { $0.contains(p) }),   // not on a drawer itself
+               let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
                 DispatchQueue.main.async { drawer.mainPressed(hit.id) }
             }
             return blockingDrag

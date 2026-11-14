@@ -446,7 +446,6 @@ final class Stage {
     var expectedMain: CGRect?        // main frame we last set; anything else means the user moved/re-tiled it
     var quietUntil: CFTimeInterval = 0
     var pressWatch: Timer?           // watching a mouse press on the main window for a drag
-    var clickPending = false         // the main app was brought forward by that press
     var relayoutTimer: Timer?
     private var observer: AXObserver?
     var onMainChanged: (() -> Void)?
@@ -511,7 +510,9 @@ final class Drawer {
     /// drop its drawers on the spot. Checked every frame from the mouse rather than from move notifications,
     /// which apps can deliver late or only once the drag ends.
     func mainPressed(_ mainID: String) {
-        guard let st = stages[mainID], st.pressWatch == nil, let mw = st.mainWindow, let start = axFrame(mw) else { return }
+        guard let st = stages[mainID], st.pressWatch == nil else { return }
+        dropFloating(st)   // a click on the main window covers floating drawers anyway: hide them now
+        guard stages[mainID] === st, let mw = st.mainWindow, let start = axFrame(mw) else { return }
         let t = Timer(timeInterval: 0.016, repeats: true) { [weak self, weak st] t in
             guard let self, let st, self.stages[st.mainID] === st, let now = axFrame(mw) else { t.invalidate(); st?.pressWatch = nil; return }
             // Any change counts: macOS also gives a tiled ("Left Half" etc.) window its old size back the
@@ -522,18 +523,30 @@ final class Drawer {
                 self.dropAll(st)
                 return
             }
-            if NSEvent.pressedMouseButtons & 1 == 0 {   // released without moving: just a click
-                t.invalidate(); st.pressWatch = nil
-                if st.clickPending { st.clickPending = false; self.closeFloating(st) }
-            }
+            if NSEvent.pressedMouseButtons & 1 == 0 { t.invalidate(); st.pressWatch = nil }   // just a click
         }
         RunLoop.main.add(t, forMode: .common)
         st.pressWatch = t
     }
 
-    /// Clicking the main app dismisses its floating drawers (it would cover them anyway).
-    private func closeFloating(_ st: Stage) {
-        for s in st.sessions where s.docked && !s.pair.shrinkMain { close(s.pair.id, raise: false) }
+    /// Hide `st`'s floating drawers at once (no slide): the main app came forward and would cover them.
+    /// Tiled drawers sit beside the main window, so they stay.
+    private func dropFloating(_ st: Stage) {
+        let floating = st.sessions.filter { !$0.pair.shrinkMain }
+        guard !floating.isEmpty else { return }
+        if st.animator.isRunning { st.animator.stop() }
+        for s in floating {
+            s.docked = false
+            s.stopWatching()
+            running(s.pair.drawerID)?.hide()
+        }
+        st.sessions.removeAll { !$0.pair.shrinkMain }
+        if st.sessions.isEmpty {
+            st.pressWatch?.invalidate(); st.pressWatch = nil
+            st.stopWatching()
+            stages[st.mainID] = nil
+            OpenState.clear(st.mainID)
+        }
     }
     var openAppIDs: Set<String> { Set(stages.values.flatMap { st in st.sessions.map(\.pair.drawerID) + [st.mainID] }) }
 
@@ -565,11 +578,10 @@ final class Drawer {
             guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
                   let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
                   let st = self.stages[id] else { return }
-            if st.pressWatch != nil || NSEvent.pressedMouseButtons & 1 != 0 {
-                st.clickPending = true   // a click or the start of a drag: mainPressed decides on release
-                self.mainPressed(id)     // (no-op if the event tap already started watching)
+            if NSEvent.pressedMouseButtons & 1 != 0 {
+                self.mainPressed(id)     // clicked (no-op if the event tap already handled the press)
             } else {
-                self.closeFloating(st)
+                self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab
             }
         }
         // Quitting an app with a dragged-out drawer window closes that window too.

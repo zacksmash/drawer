@@ -196,7 +196,7 @@ final class CarouselController {
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
             let began = CACurrentMediaTime()
-            self.animator.run(duration: 0.4, curve: easeOutBack, step: { e in
+            self.animator.run(duration: 0.3, curve: glide, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
                 overlay?.fadeOut(min((CACurrentMediaTime() - began) / 0.25, 1))
             }) {
@@ -295,8 +295,8 @@ final class Transition {
         if let image {
             configure(incoming, image, window.backingScaleFactor)
             incoming.shadowColor = NSColor.black.cgColor
-            incoming.shadowOpacity = 0.3
-            incoming.shadowRadius = 14
+            incoming.shadowOpacity = style == .push ? 0 : style == .parallax ? 0.5 : 0.3
+            incoming.shadowRadius = style == .parallax ? 28 : 14
             incoming.shadowOffset = .zero
             incoming.shadowPath = CGPath(roundedRect: root.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
             root.addSublayer(incoming)
@@ -312,16 +312,21 @@ final class Transition {
             l.opacity = Float(opacity)
         }
         let (duration, curve): (Double, (Double) -> Double) = switch style {
-        case .carousel, .push, .parallax: (0.42, easeOutBack)
+        case .carousel: (0.4, glide)
+        case .push: (0.5, cubicBezier(0.65, 0, 0.35, 1))
+        case .parallax: (0.45, glide)
         case .zoom: (0.32, easeOutCubic)
         case .crossfade, .slide, .slideFade: (0.25, { $0 })
         case .flip: (0.5, cubicBezier(0.45, 0, 0.55, 1))
+        }
+        // Styles that shrink or turn the pictures need a backdrop, or the real next window shows around them.
+        if [.push, .parallax, .flip].contains(style) {
+            root.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
         }
         if style == .flip {
             var p = CATransform3DIdentity
             p.m34 = -1 / 1200
             root.sublayerTransform = p
-            root.backgroundColor = NSColor(white: 0.08, alpha: 0.9).cgColor
             incoming.isHidden = true
         }
         let step: (Double) -> Void = { [self] e in
@@ -331,12 +336,16 @@ final class Transition {
                 set(incoming, x: dir * w * (1 - e))
                 outgoing.isHidden = e >= 1   // overshooting: the real window shows on the far side, not the old picture
             case .push:
-                set(incoming, x: dir * w * (1 - e))
-                set(outgoing, x: -dir * w * e)
+                // Two cards side by side: both shrink a little mid-way, travel together with a gap, settle.
+                let s = 1 - 0.1 * sin(.pi * e)
+                let span = w + 24
+                set(incoming, x: dir * span * (1 - e), scale: s)
+                set(outgoing, x: -dir * span * e, scale: s)
             case .parallax:
+                // The current app sinks back (slower, smaller, darker) under the one sliding over it.
                 set(incoming, x: dir * w * (1 - e))
-                set(outgoing, x: -dir * w * 0.3 * e, scale: 1 - 0.05 * min(e, 1))
-                dim.opacity = Float(0.35 * min(e, 1))
+                set(outgoing, x: -dir * w * 0.25 * e, scale: 1 - 0.08 * e)
+                dim.opacity = Float(0.5 * e)
             case .zoom:
                 set(outgoing, scale: 1 - 0.15 * e, opacity: 1 - e)
             case .crossfade, .slide, .slideFade:

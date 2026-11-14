@@ -47,11 +47,11 @@ enum CarouselStyle: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .slide: "The next app slides in a little way over the current one and settles with a bounce."
+        case .slide: "The next app slides in a little way over the current one."
         case .slideFade: "Like Slide, while the current app fades away."
-        case .carousel: "The next app slides all the way across the spot, kept inside it."
-        case .push: "The next app pushes the current one out the other side."
-        case .parallax: "The next app slides over while the current one drifts back, dimmed."
+        case .carousel: "The next app slides all the way across, covering the current one, which stays still."
+        case .push: "Both apps shrink into cards and travel side by side, the next pushing the current one out."
+        case .parallax: "The next app slides over while the current one sinks back: slower, smaller and darker."
         case .zoom: "The current app shrinks away and fades, revealing the next."
         case .crossfade: "The current app dissolves into the next."
         case .flip: "The spot flips over like a card to the next app."

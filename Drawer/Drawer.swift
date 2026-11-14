@@ -234,8 +234,8 @@ func cubicBezier(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> (Dou
         return b(t, y1, y2)
     }
 }
-/// Slides in, overshoots a touch, settles back.
-let easeOutBack = cubicBezier(0.34, 1.4, 0.64, 1)
+/// Quick start, long gentle landing, no overshoot.
+let glide = cubicBezier(0.32, 0.72, 0, 1)
 let easeInCubic: (Double) -> Double = { $0 * $0 * $0 }           // leave: gentle start, exits at speed
 
 /// Applies window frames on a background queue, always jumping to the most recent request,

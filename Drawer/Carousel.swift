@@ -206,20 +206,27 @@ final class CarouselController {
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
             if let carousel { self.sliding = (carousel, w, app, frame) }
-            // Hide the current app (willShow) only once this one is actually in front: hiding the app in
-            // front makes macOS bring forward some other app first, which flashes on screen.
-            var shown = willShow
-            let reveal = { if let f = shown, app.isActive { shown = nil; f() } }
-            self.animator.run(duration: 0.26, curve: glide, step: { e in
-                setPos(w, lerp(start, frame, e).origin)
-                reveal()
-            }) {
-                if let f = shown { shown = nil; f() }   // didn't come to the front in time; hide it anyway
-                self.sliding = nil
-                if let f = axFrame(w), f != frame { setFrame(w, frame) }   // the last step put it there already
-                if !app.isActive { bringToFront(app, w) }   // re-activating would re-raise it: a visible hitch
-                done(true)
+            // Start the clock once it's actually in front (on screen), a few frames after asking, so the whole
+            // slide is seen rather than its first frames happening out of sight and the rest looking like a jump.
+            // Hiding the current app (willShow) also waits for that: hiding the app in front makes macOS bring
+            // forward some other app first, which flashes on screen.
+            let asked = CACurrentMediaTime()
+            let wait = Timer(timeInterval: 0.004, repeats: true) { wait in
+                if carousel != nil, self.sliding == nil { wait.invalidate(); return }   // a peek let go already
+                guard app.isActive || CACurrentMediaTime() - asked > 0.15 else { return }
+                wait.invalidate()
+                willShow?()
+                self.animator.run(duration: 0.26, curve: glide, step: { e in
+                    setPos(w, lerp(start, frame, e).origin)
+                }) {
+                    self.sliding = nil
+                    if let f = axFrame(w), f != frame { setFrame(w, frame) }   // the last step put it there already
+                    if !app.isActive { bringToFront(app, w) }   // re-activating would re-raise it: a visible hitch
+                    done(true)
+                }
             }
+            RunLoop.main.add(wait, forMode: .common)
+            wait.fire()
         }
         RunLoop.main.add(t, forMode: .common)
         t.fire()

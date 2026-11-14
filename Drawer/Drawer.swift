@@ -1020,7 +1020,8 @@ final class Drawer {
         let others = st.sessions.filter { $0 !== s }
         st.quietUntil = .infinity
         let top = pair.edge == .top
-        st.animator.run(duration: top ? 0.3 : 0.28, curve: top ? glide : easeOutCubic, step: { e in
+        // A top drawer only drops a short way, so it takes its time: a soft start and a long, gentle landing.
+        st.animator.run(duration: top ? 0.45 : 0.28, curve: top ? cubicBezier(0.25, 0.1, 0.25, 1) : easeOutCubic, step: { e in
             let d = lerp(start, open, e)
             setPos(w, d.origin)
             let lead = 40 * (1 - e)   // tapers to zero so the last frame is exact (no snap)

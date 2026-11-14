@@ -188,8 +188,8 @@ final class Hotkey {
             // A press on a main window with drawers might start dragging it: let Drawer watch for that.
             if !blockingDrag, !s.lockedFrames.contains(where: { $0.contains(p) }),   // not on a drawer itself
                let hit = s.mainFrames.first(where: { $0.frame.contains(p) }) {
-                let focused = s.front == hit.id   // only a click in the main app while it's in front dismisses
-                DispatchQueue.main.async { drawer.mainPressed(hit.id, dismiss: focused) }
+                let from = s.front
+                DispatchQueue.main.async { drawer.mainPressed(hit.id, from: from) }
             }
             return blockingDrag
         case .leftMouseDragged:

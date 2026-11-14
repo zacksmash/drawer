@@ -475,6 +475,11 @@ struct ShortcutRecorder: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            if let resetTo, shortcut != resetTo, !recording {
+                Button { shortcut = resetTo } label: { Image(systemName: "arrow.counterclockwise") }
+                    .buttonStyle(.borderless)
+                    .help("Reset to \(resetTo.display)")
+            }
             Button { recording ? stop() : start() } label: {
                 HStack(spacing: 3) {
                     if recording {
@@ -493,11 +498,6 @@ struct ShortcutRecorder: View {
             .buttonStyle(.plain)
             .help("Click to record a new shortcut")
 
-            if let resetTo, shortcut != resetTo, !recording {
-                Button { shortcut = resetTo } label: { Image(systemName: "arrow.counterclockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Reset to \(resetTo.display)")
-            }
         }
     }
 

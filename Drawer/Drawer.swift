@@ -309,13 +309,15 @@ enum OpenState {
 /// One open drawer window.
 final class DrawerSession {
     let pair: Pair
-    let window: AXUIElement
+    private(set) var window: AXUIElement   // can change: apps like TablePlus swap one window for another
     var parked: CGPoint = .zero      // where macOS actually let the drawer sit off-screen (it pins windows at the edge)
     var docked = false               // fully open; edge drags are blocked and dragging it pops it out
     let resizer = AsyncResizer()
     private var observer: AXObserver?
     var onPopOut: (() -> Void)?
+    var onWindowGone: (() -> Void)?  // its window closed while docked (the app may be opening another)
     var expected: CGRect = .zero     // frame we last put it at
+    private static let notes = [kAXMovedNotification, kAXUIElementDestroyedNotification]
 
     init(pair: Pair, window: AXUIElement) { (self.pair, self.window) = (pair, window) }
 
@@ -323,20 +325,29 @@ final class DrawerSession {
     func watchMoves(app: NSRunningApplication) {
         guard observer == nil else { return }
         var obs: AXObserver?
-        guard AXObserverCreate(app.processIdentifier, { _, _, _, refcon in
-            Unmanaged<DrawerSession>.fromOpaque(refcon!).takeUnretainedValue().moved()
+        guard AXObserverCreate(app.processIdentifier, { _, _, note, refcon in
+            let me = Unmanaged<DrawerSession>.fromOpaque(refcon!).takeUnretainedValue()
+            if note as String == kAXUIElementDestroyedNotification as String { if me.docked { me.onWindowGone?() } }
+            else { me.moved() }
         }, &obs) == .success, let obs else { return }
-        AXObserverAddNotification(obs, window, kAXMovedNotification as CFString, Unmanaged.passUnretained(self).toOpaque())
+        for n in Self.notes { AXObserverAddNotification(obs, window, n as CFString, Unmanaged.passUnretained(self).toOpaque()) }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         observer = obs
     }
 
     func stopWatching() {
         if let observer {
-            AXObserverRemoveNotification(observer, window, kAXMovedNotification as CFString)
+            for n in Self.notes { AXObserverRemoveNotification(observer, window, n as CFString) }
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
         observer = nil
+    }
+
+    /// Track `w` instead of the window that closed.
+    func adopt(_ w: AXUIElement, app: NSRunningApplication) {
+        stopWatching()
+        window = w
+        watchMoves(app: app)
     }
 
     private func moved() {
@@ -527,6 +538,26 @@ final class Drawer {
         }
         RunLoop.main.add(t, forMode: .common)
         st.pressWatch = t
+    }
+
+    /// A docked drawer's window closed. Apps like TablePlus close one window and open another (picker →
+    /// database → picker): put the new one in the drawer's spot and keep going with it.
+    private func adoptReplacement(_ st: Stage, _ s: DrawerSession) {
+        let started = CACurrentMediaTime()
+        let t = Timer(timeInterval: 0.03, repeats: true) { [weak self, weak st, weak s] t in
+            guard let self, let st, let s, s.docked, st.sessions.contains(where: { $0 === s }) else { t.invalidate(); return }
+            guard CACurrentMediaTime() - started < 2, let app = running(s.pair.drawerID) else {
+                // No new window (the user just closed it, or quit): close the drawer and give the space back.
+                t.invalidate(); self.close(s.pair.id, raise: false); return
+            }
+            guard let w = axWindow(app), !CFEqual(w, s.window), isStandardWindow(w) else { return }
+            t.invalidate()
+            setFrame(w, s.expected)
+            s.adopt(w, app: app)
+            self.lastWindows[s.pair.drawerID] = w
+        }
+        RunLoop.main.add(t, forMode: .common)
+        t.fire()
     }
 
     /// Hide `st`'s floating drawers at once (no slide): the main app came forward and would cover them.
@@ -772,6 +803,7 @@ final class Drawer {
             s.docked = true
             s.onPopOut = { [weak self, weak st, weak s] in if let st, let s { self?.popOut(st, s) } }
             s.watchMoves(app: app)
+            s.onWindowGone = { [weak self, weak st, weak s] in if let st, let s { self?.adoptReplacement(st, s) } }
             st.quietUntil = CACurrentMediaTime() + 0.4   // let our last resizes land before watching for user moves
             // Once settled, check the app kept the size we asked for. If it won't go that small (Rex has a
             // minimum height), remember that and re-fit so the drawer stays anchored to its edge.
@@ -799,6 +831,7 @@ final class Drawer {
         s.docked = false
         s.stopWatching()
         let app = running(s.pair.drawerID)
+        if axFrame(s.window) == nil, let app, let w = axWindow(app) { s.adopt(w, app: app) }   // its window was swapped
         guard let f = axFrame(s.window) else { app?.hide(); finishStage(st, after); return }
         let parked = CGRect(origin: s.parked, size: f.size)
         let others = st.sessions

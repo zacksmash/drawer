@@ -99,14 +99,19 @@ final class CarouselController {
             guard let current else { plain(); return }
             let overlay = Transition(frame: frame, current: current)
             if style == .slideFade, !reversed {
-                self.bringIn(to, frame: frame, from: edge, overlay: overlay) { ok in overlay.close(); finish(ok) }
+                // The picture stands in for the current app, so hide it as the next appears (one shadow, not two).
+                self.bringIn(to, frame: frame, from: edge, overlay: overlay, willShow: { from?.hide() }) { ok in
+                    if !ok { from?.unhide() }
+                    overlay.close(); finish(ok)
+                }
                 return
             }
             // Played out in pictures over the spot: put the real window in place underneath first,
             // then animate the pictures and lift them off.
-            self.bringIn(to, frame: frame, from: edge, animated: false) { ok in
-                guard ok else { overlay.close(); finish(false); return }
-                from?.hide()
+            // Hide the current app the moment the next one appears under the pictures, so the two windows'
+            // shadows never stack up (a darker, doubled shadow for a moment).
+            self.bringIn(to, frame: frame, from: edge, animated: false, willShow: { from?.hide() }) { ok in
+                guard ok else { from?.unhide(); overlay.close(); finish(false); return }
                 let play: (CGImage?) -> Void = { other in
                     overlay.play(style, edge: edge, other: other, reversed: reversed) { overlay.close(); finish(true) }
                 }
@@ -168,7 +173,7 @@ final class CarouselController {
     /// Launch or unhide `id`, park its window just outside the spot on `edge`, then slide it in
     /// (fading `overlay` out meanwhile). Not `animated`: put it straight in the spot and in front.
     private func bringIn(_ id: String, frame: CGRect, from edge: Edge, overlay: Transition? = nil,
-                         animated: Bool = true, done: @escaping (Bool) -> Void) {
+                         animated: Bool = true, willShow: (() -> Void)? = nil, done: @escaping (Bool) -> Void) {
         let started = CACurrentMediaTime()
         var parked = false, reopened = false
         let closed = animated ? entryFrame(frame, from: edge) : frame
@@ -201,6 +206,7 @@ final class CarouselController {
                 parked = true
                 // Activating it unhides it already in front; a plain unhide can show it behind the current
                 // app for a frame before it's raised (a flicker).
+                willShow?()
                 bringToFront(app, w)
                 return
             }

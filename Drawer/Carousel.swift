@@ -38,11 +38,13 @@ final class CarouselController {
     }
 
     /// Where the incoming window starts: one tile gap out on that side, so it barely moves outside the spot.
+    /// (8pt even with tile margins off, so there's still a slide.)
     private func entryFrame(_ frame: CGRect, from edge: Edge) -> CGRect {
+        let gap = max(tileGap, 8)
         switch edge {
-        case .left: return frame.offsetBy(dx: -tileGap, dy: 0)
-        case .right: return frame.offsetBy(dx: tileGap, dy: 0)
-        case .bottom: return frame.offsetBy(dx: 0, dy: tileGap)
+        case .left: return frame.offsetBy(dx: -gap, dy: 0)
+        case .right: return frame.offsetBy(dx: gap, dy: 0)
+        case .bottom: return frame.offsetBy(dx: 0, dy: gap)
         }
     }
 

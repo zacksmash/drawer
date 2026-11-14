@@ -9,6 +9,10 @@ final class CarouselController {
     /// The last swap, so a peek (shortcut held) can undo it on release.
     private var last: (carousel: UUID, from: String, to: String, forward: Bool)?
     private var returnWanted = false
+    /// While the shortcut that cycled is still held, the app it replaced stays under the new one (so a
+    /// peek can back out over it); it's hidden once the key comes up as a tap.
+    private var keyHeld = false
+    private var underneath: NSRunningApplication?
 
     /// Whether `shortcut` cycles a carousel while `front` is in front.
     func handles(front: String?, shortcut: Shortcut) -> Bool {
@@ -18,12 +22,13 @@ final class CarouselController {
 
     var memberIDs: Set<String> { Set(Config.shared.carousels.filter { $0.members.count > 1 }.flatMap(\.members)) }
 
-    func cycle(front: String?, shortcut: Shortcut) {
-        cycle(front: front, forward: shortcut == Config.shared.shortcut(for: .right))
+    /// `held`: from a key press, which may turn into a peek.
+    func cycle(front: String?, shortcut: Shortcut, held: Bool = false) {
+        cycle(front: front, forward: shortcut == Config.shared.shortcut(for: .right), held: held)
     }
 
     /// Forward = the next app, coming in from the right.
-    func cycle(front: String?, forward: Bool) {
+    func cycle(front: String?, forward: Bool, held: Bool = false) {
         guard AXIsProcessTrusted() else { drawer.promptAccessibility(); return }
         guard let front, let c = Config.shared.carousel(containing: front), !busy.contains(c.id),
               let cur = c.members.firstIndex(of: front) else { return }
@@ -35,7 +40,15 @@ final class CarouselController {
         guard let frame = drawer.releaseMain(front) ?? curApp.flatMap(axWindow).flatMap(axFrame) else { return }
         last = (c.id, front, members[next], forward)
         returnWanted = false
+        underneath?.hide(); underneath = nil
+        keyHeld = held
         swap(c.id, from: curApp, to: members[next], frame: frame, edge: forward ? .right : .left)
+    }
+
+    /// The cycling shortcut came up: a peek goes back; a tap keeps the new app and hides the old one.
+    func keyReleased(peek: Bool) {
+        keyHeld = false
+        if peek { endPeek() } else { underneath?.hide(); underneath = nil }
     }
 
     /// The user switched to `app` itself (Dock, ⌘-Tab…). If it's in a carousel and another member is
@@ -82,7 +95,9 @@ final class CarouselController {
         busy.insert(cid)
         let finish: (Bool) -> Void = { [weak self] ok in
             guard let self else { return }
-            if ok { from?.hide() }
+            // Still held: leave the old app underneath for a peek to back out over.
+            if ok, !reversed, self.keyHeld || self.returnWanted { self.underneath = from }
+            else if ok { from?.hide() }
             self.busy.remove(cid)
             if self.returnWanted { self.returnWanted = false; self.endPeek() }
         }
@@ -97,9 +112,13 @@ final class CarouselController {
         guard let app, let w = axWindow(app), let back = running(to), let bw = axWindow(back) else {
             bringIn(to, frame: frame, from: edge, animated: false, done: done); return
         }
-        setFrame(bw, frame)   // while still hidden
-        back.unhide()
-        AXUIElementPerformAction(w, kAXRaiseAction as CFString)   // keep the peeked window on top of it
+        if underneath?.processIdentifier == back.processIdentifier, !back.isHidden {
+            underneath = nil   // still right there under the peeked window
+        } else {
+            setFrame(bw, frame)   // while still hidden
+            back.unhide()
+            AXUIElementPerformAction(w, kAXRaiseAction as CFString)   // keep the peeked window on top of it
+        }
         let end = entryFrame(frame, from: edge)
         animator.run(duration: 0.2, curve: glide, step: { e in
             setPos(w, lerp(frame, end, e).origin)

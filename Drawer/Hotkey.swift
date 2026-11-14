@@ -186,13 +186,12 @@ final class Hotkey {
         if type == .keyUp {
             guard let start = pressedAt, key == pressedKey else { return false }
             pressedAt = nil
-            if s.peek, CACurrentMediaTime() - start > peekThreshold {
-                DispatchQueue.main.async {   // held → it was a peek
-                    if let id = self.openedByPress { drawer.close(id) }
-                    if self.cycledByPress { carousels.endPeek() }
-                    self.openedByPress = nil
-                    self.cycledByPress = false
-                }
+            let peeked = s.peek && CACurrentMediaTime() - start > peekThreshold   // held → it was a peek
+            DispatchQueue.main.async {
+                if peeked, let id = self.openedByPress { drawer.close(id) }
+                if self.cycledByPress { carousels.keyReleased(peek: peeked) }
+                self.openedByPress = nil
+                self.cycledByPress = false
             }
             return true
         }
@@ -208,7 +207,7 @@ final class Hotkey {
         pressedKey = key
         DispatchQueue.main.async {
             if let c = [hovered, front].compactMap({ $0 }).first(where: { carousels.handles(front: $0, shortcut: shortcut) }) {
-                carousels.cycle(front: c, shortcut: shortcut)   // ‹ / › in a carousel app
+                carousels.cycle(front: c, shortcut: shortcut, held: true)   // ‹ / › in a carousel app
                 self.openedByPress = nil
                 self.cycledByPress = true
             } else {

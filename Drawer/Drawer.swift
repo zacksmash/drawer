@@ -57,11 +57,11 @@ func screenFrame(containing r: CGRect) -> CGRect {
     return frames.max { $0.intersection(r).width * $0.intersection(r).height < $1.intersection(r).width * $1.intersection(r).height } ?? frames[0]
 }
 
-/// Bring an app and its window to the front. `NSRunningApplication.activate()` from a background
-/// app is often ignored on macOS 14+, so set the app frontmost through Accessibility instead.
 /// When Drawer last brought an app forward itself, so it can tell those activations from the user's.
 var lastOwnActivation: CFTimeInterval = 0
 
+/// Bring an app and its window to the front. `NSRunningApplication.activate()` from a background
+/// app is often ignored on macOS 14+, so set the app frontmost through Accessibility instead.
 func bringToFront(_ app: NSRunningApplication, _ window: AXUIElement?) {
     lastOwnActivation = CACurrentMediaTime()
     let el = AXUIElementCreateApplication(app.processIdentifier)
@@ -97,13 +97,21 @@ func onCurrentSpace(_ app: NSRunningApplication, window: AXUIElement) -> Bool {
     return list.contains { w in
         guard (w[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier, (w[kCGWindowLayer as String] as? Int) == 0,
               let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b) else { return false }
-        return abs(r.minX - f.minX) + abs(r.minY - f.minY) + abs(r.width - f.width) + abs(r.height - f.height) < 4
+        return near(r, f, within: 4)
     }
 }
 
 /// Same spot and size, give or take a few points.
-func near(_ a: CGRect, _ b: CGRect) -> Bool {
-    abs(a.minX - b.minX) + abs(a.minY - b.minY) + abs(a.width - b.width) + abs(a.height - b.height) < 8
+func near(_ a: CGRect, _ b: CGRect, within t: CGFloat = 8) -> Bool {
+    abs(a.minX - b.minX) + abs(a.minY - b.minY) + abs(a.width - b.width) + abs(a.height - b.height) < t
+}
+
+/// Launch or reopen an app without bringing it forward or showing its windows.
+func openHidden(_ url: URL) {
+    let conf = NSWorkspace.OpenConfiguration()
+    conf.activates = false
+    conf.hides = true
+    NSWorkspace.shared.openApplication(at: url, configuration: conf)
 }
 
 func lerp(_ a: CGFloat, _ b: CGFloat, _ t: Double) -> CGFloat { a + (b - a) * t }
@@ -112,17 +120,8 @@ func lerp(_ a: CGRect, _ b: CGRect, _ t: Double) -> CGRect {
            width: lerp(a.width, b.width, t), height: lerp(a.height, b.height, t))
 }
 
-// MARK: Layout
+// MARK: Minimum sizes
 
-/// Frames for a main window and every drawer open around it (AX coords).
-struct StageLayout {
-    var main: CGRect
-    var drawers: [UUID: CGRect]
-}
-
-/// Lay out `pairs` (the open drawers of one main app) around the main window's full frame `area`.
-/// Tiled ("make room") side drawers take full-height strips and a tiled bottom drawer spans the width
-/// left between them; the main window gets what remains. Floating drawers sit inside the main window.
 /// Smallest size each drawer app will let its window be (e.g. Rex won't go under 526pt tall), learned by
 /// asking for a size and reading back what the app kept. Layouts never go below it, so the drawer stays
 /// anchored to its edge instead of hanging off the main window.
@@ -153,6 +152,17 @@ func learnMinSize(_ app: String, window w: AXUIElement, asked: CGSize) -> Bool {
     return true
 }
 
+// MARK: Layout
+
+/// Frames for a main window and every drawer open around it (AX coords).
+struct StageLayout {
+    var main: CGRect
+    var drawers: [UUID: CGRect]
+}
+
+/// Lay out `pairs` (the open drawers of one main app) around the main window's full frame `area`.
+/// Tiled ("make room") side drawers take full-height strips and a tiled bottom drawer spans the width
+/// left between them; the main window gets what remains. Floating drawers sit inside the main window.
 func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     let gap = tileGap, inset = Config.shared.inset
     var main = area
@@ -233,7 +243,10 @@ func track(old: CGRect, new: CGRect, edge: Edge, drawer d: CGRect, lead: CGFloat
     return r
 }
 
+// MARK: Animation
+
 let easeOutCubic: (Double) -> Double = { 1 - pow(1 - $0, 3) }   // arrive: fast start, soft landing
+let easeInCubic: (Double) -> Double = { $0 * $0 * $0 }           // leave: gentle start, exits at speed
 
 /// CSS-style cubic-bezier(x1, y1, x2, y2) easing. y values outside 0…1 overshoot (a bounce).
 func cubicBezier(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> (Double) -> Double {
@@ -251,26 +264,21 @@ func cubicBezier(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> (Dou
         return b(t, y1, y2)
     }
 }
+
 /// Quick start, long gentle landing, no overshoot.
 let glide = cubicBezier(0.32, 0.72, 0, 1)
-let easeInCubic: (Double) -> Double = { $0 * $0 * $0 }           // leave: gentle start, exits at speed
 
 /// Applies window frames on a background queue, always jumping to the most recent request,
 /// so a main app that's slow to resize lags slightly instead of stalling the drawer's animation.
 final class AsyncResizer {
     private let queue = DispatchQueue(label: "drawer.resize", qos: .userInteractive)
     private let lock = NSLock()
-    private var latest: (AXUIElement, CGRect, Bool)?   // window, frame, move only (keep its size)
+    private var latest: (window: AXUIElement, frame: CGRect)?
     private var busy = false
 
-    func request(_ window: AXUIElement, _ frame: CGRect) { enqueue((window, frame, false)) }
-
-    /// Just move it. Much cheaper for the app than a resize, which makes it lay out again (and jitter).
-    func move(_ window: AXUIElement, _ origin: CGPoint) { enqueue((window, CGRect(origin: origin, size: .zero), true)) }
-
-    private func enqueue(_ job: (AXUIElement, CGRect, Bool)) {
+    func request(_ window: AXUIElement, _ frame: CGRect) {
         lock.lock()
-        latest = job
+        latest = (window, frame)
         guard !busy else { lock.unlock(); return }
         busy = true
         lock.unlock()
@@ -283,7 +291,7 @@ final class AsyncResizer {
             guard let job = latest else { busy = false; lock.unlock(); return }
             latest = nil
             lock.unlock()
-            if job.2 { setPos(job.0, job.1.origin) } else { setFrame(job.0, job.1) }
+            setFrame(job.window, job.frame)
         }
     }
 }
@@ -503,7 +511,22 @@ final class Stage {
     }
 
     var tiled: Bool { sessions.contains { $0.pair.tiles } }
-    func layout(_ pairs: [Pair]? = nil) -> StageLayout { stageLayout(area: area, pairs: pairs ?? sessions.map(\.pair)) }
+    /// While a tiled drawer on `edge` slides (now at `d`), move the main window and `others` along from `before`
+    /// toward `after`, keeping the side facing it on the drawer's leading edge (see `track`).
+    func follow(_ others: [DrawerSession], before: StageLayout, after: StageLayout, edge: Edge, drawer d: CGRect, lead: CGFloat) {
+        setMain(track(old: before.main, new: after.main, edge: edge, drawer: d, lead: lead))
+        for o in others { if let a = before.drawers[o.pair.id], let b = after.drawers[o.pair.id], a != b {
+            o.expected = b
+            o.resizer.request(o.window, track(old: a, new: b, edge: edge, drawer: d, lead: lead))
+        } }
+    }
+
+    /// Send each drawer to its frame in `l`, if it isn't there already.
+    func fit(_ l: StageLayout) {
+        for o in sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
+    }
+
+    func layout() -> StageLayout { stageLayout(area: area, pairs: sessions.map(\.pair)) }
 
     func watchMain(app: NSRunningApplication) {
         guard observer == nil, let mainWindow else { return }
@@ -548,15 +571,61 @@ final class Drawer {
     private var lastWindows: [String: AXUIElement] = [:]
     /// Drawer windows the user dragged out, by drawer app, until they close or dock again.
     private var popped: [String: PoppedWindow] = [:]
+    /// Yellow's little hop as a drawer pops out.
+    private let nudger = Animator()
+    /// Each drawer's size when an edge drag started.
+    private var resizeStart: [UUID: Double] = [:]
+    /// When the event tap last saw a press on each main window, and whether it brings the drawers back.
+    private var lastMainPress: [String: (at: CFTimeInterval, restore: Bool)] = [:]
+    /// Apps already warned about a window on another desktop (once per launch).
+    private var warned = Set<String>()
+
+    init() {
+        // Switching to the main app (⌘-Tab) dismisses its floating drawers, which it would cover anyway. A click
+        // coming from another app brings them back instead (see mainPressed).
+        // Tiled drawers sit beside the main window, so they stay.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
+                  let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
+                  let st = self.stages[id] else { return }
+            // A click: the event tap handled it (a quick click can be over before this arrives).
+            if NSEvent.pressedMouseButtons & 1 != 0 || CACurrentMediaTime() - (self.lastMainPress[id]?.at ?? 0) < 1 {
+                if self.lastMainPress[id]?.restore == true, st.pressWatch == nil { self.raiseFloating(st) }
+            } else {
+                self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab
+            }
+        }
+        // Switching to a drawer app opens it in its drawer.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
+                  let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.appActivated(app)
+        }
+        // A drawer app quit: its drawers are gone, so give their space back to the main window right away
+        // (its windows vanish without a close notification). Quitting with a dragged-out drawer window
+        // closes that window too.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            else { return }
+            for st in self.stages.values { for s in st.sessions where s.pair.drawerID == id { self.close(s.pair.id, raise: false) } }
+            for p in self.pending.keys where Config.shared.pairs.first(where: { $0.id == p })?.drawerID == id {
+                self.pending.removeValue(forKey: p)?.invalidate()
+            }
+            if let p = self.popped[id] { self.forgetMovedSpot(p) }
+        }
+    }
+
 
     /// Windows of open drawers, whose traffic lights do Drawer things.
     var dockedWindows: [(id: UUID, window: AXUIElement)] {
         stages.values.flatMap { st in st.sessions.filter(\.docked).map { ($0.pair.id, $0.window) } }
     }
 
-    /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and
-    /// state), yellow lets it out as an ordinary window (with a pop and a small hop toward the middle of the screen), green switches between its
-    /// size and Full.
+    /// A drawer's traffic light was clicked. Red slides the drawer away (the app keeps its window and state),
+    /// yellow lets it out as an ordinary window, green switches between its size and Full.
     func trafficLight(_ kind: TrafficLight, of id: UUID) {
         guard let (st, s) = session(id), s.docked else { return }
         switch kind {
@@ -601,8 +670,6 @@ final class Drawer {
         e.postToPid(app.processIdentifier)
     }
 
-    private let nudger = Animator()
-
     /// Full size and back to the size it had before.
     func toggleFull(_ id: UUID) {
         guard let (st, s) = session(id), s.docked, let i = Config.shared.pairs.firstIndex(where: { $0.id == id }) else { return }
@@ -619,7 +686,7 @@ final class Drawer {
         let l = st.layout()
         st.quietUntil = CACurrentMediaTime() + 0.6
         if st.tiled || wasTiled { st.setMain(l.main) }
-        for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
+        st.fit(l)
     }
 
     var lockedFrames: [CGRect] { stages.values.flatMap { $0.sessions.filter(\.docked).map(\.expected) } }
@@ -663,10 +730,8 @@ final class Drawer {
         let l = st.layout()
         st.quietUntil = CACurrentMediaTime() + 0.5
         if s.pair.tiles { st.setMain(l.main) }
-        for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
+        st.fit(l)
     }
-
-    private var resizeStart: [UUID: Double] = [:]
 
     func beginResize(_ id: UUID) {
         if let (_, s) = session(id) { resizeStart[id] = s.pair.size }
@@ -691,7 +756,7 @@ final class Drawer {
         let l = st.layout()
         st.quietUntil = CACurrentMediaTime() + 0.6
         if st.tiled { st.setMain(l.main) }
-        for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
+        st.fit(l)
     }
     var mainFrames: [(id: String, frame: CGRect)] {
         stages.values.compactMap { st in st.expectedMain.map { (st.mainID, $0) } }
@@ -753,7 +818,7 @@ final class Drawer {
     private func dropFloating(_ st: Stage) {
         let floating = st.sessions.filter { !$0.pair.tiles }
         guard !floating.isEmpty else { return }
-        if st.animator.isRunning { st.animator.stop() }
+        st.animator.stop()
         for s in floating {
             s.docked = false
             s.stopWatching()
@@ -774,14 +839,11 @@ final class Drawer {
         return nil
     }
 
-    /// Handle `shortcut` pressed with `front` frontmost. Returns the drawer it opened (for hold-to-peek).
-    @discardableResult
-    /// `target`: the app the shortcut is for (under the pointer, or in front).
+    /// Handle `shortcut` for `target` (the app in front). Returns the drawer it opened (for hold-to-peek).
     func toggle(_ shortcut: Shortcut, target: String?) -> UUID? {
         guard AXIsProcessTrusted() else { promptAccessibility(); return nil }
-        let front = target
         // In an open drawer's app, act on behalf of its main app.
-        let main = stages.values.first { st in st.sessions.contains { $0.pair.drawerID == front } }?.mainID ?? front
+        let main = stages.values.first { st in st.sessions.contains { $0.pair.drawerID == target } }?.mainID ?? target
         guard let pair = Config.shared.pairs(forMain: main, shortcut: shortcut).first else { return nil }
         if session(pair.id) != nil || pending[pair.id] != nil { close(pair.id); return nil }
         // One app can only be in one drawer at a time: take it from wherever else it's open.
@@ -820,8 +882,6 @@ final class Drawer {
         t.fire()
     }
 
-    /// When the event tap last saw a press on each main window, and whether it brings the drawers back.
-    private var lastMainPress: [String: (at: CFTimeInterval, restore: Bool)] = [:]
 
     /// The main window came forward over its floating drawers: bring them back on top. macOS won't put a
     /// background app's window above the app in front, so the drawer app comes to the front (as when it opened).
@@ -836,44 +896,6 @@ final class Drawer {
         raise()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             if running(st.mainID)?.isActive == true { raise() }
-        }
-    }
-
-    init() {
-        // Switching to the main app (⌘-Tab) dismisses its floating drawers, which it would cover anyway. A click
-        // coming from another app brings them back instead (see mainPressed).
-        // Tiled drawers sit beside the main window, so they stay.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
-                  let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
-                  let st = self.stages[id] else { return }
-            // A click: the event tap handled it (a quick click can be over before this arrives).
-            if NSEvent.pressedMouseButtons & 1 != 0 || CACurrentMediaTime() - (self.lastMainPress[id]?.at ?? 0) < 1 {
-                if self.lastMainPress[id]?.restore == true, st.pressWatch == nil { self.raiseFloating(st) }
-            } else {
-                self.dropFloating(st)    // switched to it, e.g. with ⌘-Tab
-            }
-        }
-        // Switching to a drawer app opens it in its drawer.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            guard let self, CACurrentMediaTime() - lastOwnActivation > 0.5,
-                  let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            self.appActivated(app)
-        }
-        // A drawer app quit: its drawers are gone, so give their space back to the main window right away
-        // (its windows vanish without a close notification). Quitting with a dragged-out drawer window
-        // closes that window too.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            guard let self, let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-            else { return }
-            for st in self.stages.values { for s in st.sessions where s.pair.drawerID == id { self.close(s.pair.id, raise: false) } }
-            for p in self.pending.keys where Config.shared.pairs.first(where: { $0.id == p })?.drawerID == id {
-                self.pending.removeValue(forKey: p)?.invalidate()
-            }
-            if let p = self.popped[id] { self.forgetMovedSpot(p) }
         }
     }
 
@@ -924,10 +946,7 @@ final class Drawer {
 
         if running(pair.drawerID) == nil {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pair.drawerID) else { return }
-            let conf = NSWorkspace.OpenConfiguration()
-            conf.activates = false
-            conf.hides = true   // its first window must not flash where it was last time
-            NSWorkspace.shared.openApplication(at: url, configuration: conf)
+            openHidden(url)   // its first window must not flash where it was last time
         }
 
         let t = Timer(timeInterval: 0.016, repeats: true) { [weak self] t in
@@ -970,10 +989,7 @@ final class Drawer {
                         reopened = true
                         // If it re-shows the window it hid on close, that one is already off-screen.
                         if let last = self.lastWindows[pair.drawerID] { self.park(pair, last) }
-                        let conf = NSWorkspace.OpenConfiguration()
-                        conf.activates = false
-                        conf.hides = true
-                        NSWorkspace.shared.openApplication(at: url, configuration: conf)
+                        openHidden(url)
                     }
                     return
                 }
@@ -1137,13 +1153,7 @@ final class Drawer {
             let d = lerp(start, open, e)
             if moving { setPos(w, d.origin) }
             let lead = 40 * (1 - e)   // tapers to zero so the last frame is exact (no snap)
-            if pair.tiles {
-                st.setMain(track(old: before.main, new: after.main, edge: pair.edge, drawer: d, lead: lead))
-                for o in others { if let a = before.drawers[o.pair.id], let b = after.drawers[o.pair.id], a != b {
-                    o.expected = b
-                    o.resizer.request(o.window, track(old: a, new: b, edge: pair.edge, drawer: d, lead: lead))
-                } }
-            }
+            if pair.tiles { st.follow(others, before: before, after: after, edge: pair.edge, drawer: d, lead: lead) }
         }) { [weak self, st, s] in
             if !moving, let f = axFrame(w), !near(f, open) { setFrame(w, open) }   // the genie landed off the spot
             st.setMain(after.main)
@@ -1180,7 +1190,10 @@ final class Drawer {
         s.docked = false
         s.stopWatching()
         let app = running(s.pair.drawerID)
-        if axFrame(s.window) == nil, let app, let w = axWindow(app) { s.adopt(w, app: app) }   // its window was swapped
+        if axFrame(s.window) == nil, let app, let w = axWindow(app) {   // its window was swapped
+            s.adopt(w, app: app)
+            s.stopWatching()   // adopting starts watching it again
+        }
         guard let f = axFrame(s.window) else {   // its window is gone (closed, or the app quit)
             app?.hide()
             growBack(st, to: after)
@@ -1196,23 +1209,17 @@ final class Drawer {
             let d = lerp(f, parked, e)
             setPos(s.window, d.origin)
             let lead = 40 * e   // grows from zero so the first frame doesn't jump
-            if s.pair.tiles {
-                st.setMain(track(old: before.main, new: after.main, edge: s.pair.edge, drawer: d, lead: lead))
-                for o in others { if let a = before.drawers[o.pair.id], let b = after.drawers[o.pair.id], a != b {
-                    o.expected = b
-                    o.resizer.request(o.window, track(old: a, new: b, edge: s.pair.edge, drawer: d, lead: lead))
-                } }
-            }
+            if s.pair.tiles { st.follow(others, before: before, after: after, edge: s.pair.edge, drawer: d, lead: lead) }
         }) { [weak self] in
             app?.hide()
             self?.finishStage(st, after)
-            Drawer.restoreFocus(st, wasFront: wasFront, closing: s.pair.drawerID)
+            Drawer.restoreFocus(st, wasFront: wasFront)
         }
     }
 
     /// After a drawer closes, put the main window and the drawers still open back in a sensible order.
     /// Floating drawers sit on top of the main window, so they must end up above it again.
-    private static func restoreFocus(_ st: Stage, wasFront: String?, closing: String) {
+    private static func restoreFocus(_ st: Stage, wasFront: String?) {
         if let main = running(st.mainID) { bringToFront(main, st.mainWindow) }
         if wasFront == st.mainID { return }   // the user was working in the main app: leave them there
         // The user was in a drawer: raise the floating ones over the main window, ending on the one they were in.
@@ -1223,7 +1230,6 @@ final class Drawer {
            let a = running(o.pair.drawerID) { bringToFront(a, o.window) }
     }
 
-    /// Settle a stage on `layout`, and forget it if no drawers are left.
     /// A drawer vanished without sliding out (its window closed or its app quit): ease the main window and the
     /// other drawers into the space it left, then finish up.
     private func growBack(_ st: Stage, to after: StageLayout) {
@@ -1237,6 +1243,7 @@ final class Drawer {
         }
     }
 
+    /// Settle a stage on `layout`, and forget it if no drawers are left.
     private func finishStage(_ st: Stage, _ layout: StageLayout) {
         st.setMain(st.sessions.isEmpty ? st.area : layout.main)
         for o in st.sessions { if let b = layout.drawers[o.pair.id] { o.expected = b; o.resizer.request(o.window, b) } }
@@ -1300,11 +1307,11 @@ final class Drawer {
     private func mainChanged(_ st: Stage) {
         guard stages[st.mainID] === st, !st.animator.isRunning, CACurrentMediaTime() > st.quietUntil,
               let mw = st.mainWindow, let now = axFrame(mw), let expected = st.expectedMain else { return }
-        let near = { (a: CGFloat, b: CGFloat) in abs(a - b) < 2 }
-        if near(now.minX, expected.minX), near(now.minY, expected.minY),
-           near(now.width, expected.width), near(now.height, expected.height) { return }   // our own change
+        let same = { (a: CGFloat, b: CGFloat) in abs(a - b) < 2 }
+        if same(now.minX, expected.minX), same(now.minY, expected.minY),
+           same(now.width, expected.width), same(now.height, expected.height) { return }   // our own change
 
-        if NSEvent.pressedMouseButtons & 1 != 0 || (near(now.width, expected.width) && near(now.height, expected.height)) {
+        if NSEvent.pressedMouseButtons & 1 != 0 || (same(now.width, expected.width) && same(now.height, expected.height)) {
             // Dragged (macOS may also un-tile it to its old size as the drag starts) or moved: drop its drawers.
             dropAll(st)
         } else {
@@ -1379,7 +1386,6 @@ final class Drawer {
 
     // MARK: Misc
 
-    private var warned = Set<String>()
     private func warnOtherSpace(_ id: String) {
         guard warned.insert(id).inserted else { return }
         let alert = NSAlert()

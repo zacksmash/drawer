@@ -514,9 +514,12 @@ final class Drawer {
         guard let st = stages[mainID], st.pressWatch == nil, let mw = st.mainWindow, let start = axFrame(mw) else { return }
         let t = Timer(timeInterval: 0.016, repeats: true) { [weak self, weak st] t in
             guard let self, let st, self.stages[st.mainID] === st, let now = axFrame(mw) else { t.invalidate(); st?.pressWatch = nil; return }
-            if now.size == start.size, abs(now.minX - start.minX) + abs(now.minY - start.minY) > 2 {
+            // Any change counts: macOS also gives a tiled ("Left Half" etc.) window its old size back the
+            // moment you drag it, so a drag can show up as a resize.
+            if abs(now.minX - start.minX) + abs(now.minY - start.minY) > 2
+                || abs(now.width - start.width) + abs(now.height - start.height) > 2 {
                 t.invalidate(); st.pressWatch = nil
-                self.dropAll(st, moved: CGPoint(x: now.minX - start.minX, y: now.minY - start.minY))
+                self.dropAll(st)
                 return
             }
             if NSEvent.pressedMouseButtons & 1 == 0 {   // released without moving: just a click
@@ -887,9 +890,9 @@ final class Drawer {
         if near(now.minX, expected.minX), near(now.minY, expected.minY),
            near(now.width, expected.width), near(now.height, expected.height) { return }   // our own change
 
-        if near(now.width, expected.width), near(now.height, expected.height) {
-            // Moved, not resized (e.g. by another tool): drop its drawers on the spot.
-            dropAll(st, moved: CGPoint(x: now.minX - expected.minX, y: now.minY - expected.minY))
+        if NSEvent.pressedMouseButtons & 1 != 0 || (near(now.width, expected.width) && near(now.height, expected.height)) {
+            // Dragged (macOS may also un-tile it to its old size as the drag starts) or moved: drop its drawers.
+            dropAll(st)
         } else {
             st.relayoutTimer?.invalidate()
             let t = Timer(timeInterval: 0.15, repeats: false) { [weak self, weak st] _ in if let st { self?.relayout(st) } }
@@ -899,8 +902,9 @@ final class Drawer {
     }
 
     /// Hide every drawer of `st` at once (no animation) and give the main window back its full,
-    /// un-drawered frame, shifted by however far it has been dragged.
-    private func dropAll(_ st: Stage, moved d: CGPoint) {
+    /// un-drawered size, where it is now. Set again once the mouse is released, since macOS may
+    /// still be sizing it while it's being dragged.
+    private func dropAll(_ st: Stage) {
         st.animator.stop()
         st.relayoutTimer?.invalidate()
         st.pressWatch?.invalidate(); st.pressWatch = nil
@@ -909,12 +913,19 @@ final class Drawer {
             s.stopWatching()
             running(s.pair.drawerID)?.hide()
         }
-        let wasTiled = st.tiled
         st.sessions = []
-        if wasTiled, let mw = st.mainWindow { setFrame(mw, st.area.offsetBy(dx: d.x, dy: d.y)) }
         st.stopWatching()
         stages[st.mainID] = nil
         OpenState.clear(st.mainID)
+        guard let mw = st.mainWindow else { return }
+        let size = st.area.size
+        setSize(mw, size)
+        let t = Timer(timeInterval: 0.03, repeats: true) { t in
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+            t.invalidate()
+            if let f = axFrame(mw), f.size != size { setSize(mw, size) }
+        }
+        RunLoop.main.add(t, forMode: .common)
     }
 
     /// The main window got a new size (e.g. re-tiled): treat it as the new full area and fit the drawers to it.

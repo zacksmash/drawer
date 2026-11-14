@@ -132,9 +132,22 @@ final class CarouselController {
             if back.isHidden { setFrame(bw, home); back.unhide() }   // hidden as the peeked app came in
             bringToFront(back, bw)
         }
-        app.hide()
-        setFrame(w, home)   // in place for next time
+        hideOnceBehind(app) { setFrame(w, home) }   // in place for next time
         done()
+    }
+
+    /// Hide `app` once it's no longer in front. Hiding the app in front makes macOS bring forward some
+    /// other app first, which flashes on screen.
+    private func hideOnceBehind(_ app: NSRunningApplication, then: @escaping () -> Void = {}) {
+        let started = CACurrentMediaTime()
+        let t = Timer(timeInterval: 0.008, repeats: true) { t in
+            guard !app.isActive || CACurrentMediaTime() - started > 0.5 else { return }
+            t.invalidate()
+            app.hide()
+            then()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        t.fire()
     }
 
     /// Where the incoming window starts: one tile gap out on that side, so it barely moves outside the spot.
@@ -185,7 +198,6 @@ final class CarouselController {
                 // Activating it unhides it already in front; a plain unhide can show it behind the current
                 // app for a frame before it's raised (a flicker).
                 bringToFront(app, w)
-                willShow?()
                 return
             }
             if app.isHidden { app.unhide(); return }
@@ -201,9 +213,15 @@ final class CarouselController {
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
             if let carousel { self.sliding = (carousel, w, app, start, frame) }
+            // Hide the current app (willShow) only once this one is actually in front: hiding the app in
+            // front makes macOS bring forward some other app first, which flashes on screen.
+            var shown = willShow
+            let reveal = { if let f = shown, app.isActive { shown = nil; f() } }
             self.animator.run(duration: 0.3, curve: glide, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
+                reveal()
             }) {
+                if let f = shown { shown = nil; f() }   // didn't come to the front in time; hide it anyway
                 self.sliding = nil
                 setFrame(w, frame)
                 bringToFront(app, w)

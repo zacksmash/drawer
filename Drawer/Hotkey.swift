@@ -35,8 +35,6 @@ final class Hotkey {
     private var swipeX: Double = 0           // fn + horizontal scroll travel in the current gesture
     private var swipeFired = false           // this gesture already cycled
     private var swipeLast: CFTimeInterval = 0
-    private var flick: (start: CFTimeInterval, x: Double)?   // fn + pointer flick
-    private var flickFiredAt: CFTimeInterval = 0
 
     // Main-thread state.
     private var openedByPress: UUID?         // drawer this press opened, closed on release if it was a peek
@@ -81,8 +79,7 @@ final class Hotkey {
     /// until it's gone. AXIsProcessTrusted() can't tell — it keeps answering "yes" for the rest of the
     /// process's life — so a fresh helper process asks instead (see liveTrusted).
     private func runTap() {
-        let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp,
-                                    .scrollWheel, .mouseMoved]
+        let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel]
         let mask = types.reduce(CGEventMask(0)) { $0 | CGEventMask(1 << $1.rawValue) }
         while true {
             while !liveTrusted() { Thread.sleep(forTimeInterval: 1) }
@@ -135,7 +132,6 @@ final class Hotkey {
 
         switch type {
         case .scrollWheel: return swipe(event, s)
-        case .mouseMoved: flicked(event, s); return false
         case .leftMouseDown:
             let p = event.location   // global top-left coords, same as Accessibility
             // The inner edge (facing the main window) resizes the drawer. Drawer does the resizing itself,
@@ -196,7 +192,6 @@ final class Hotkey {
         }
 
         if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
-        flick = nil
         let flags = event.flags.intersection(Shortcut.modifierMask)
         guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }),
               let front = s.front, s.handledFronts.contains(front) else { return false }
@@ -234,33 +229,26 @@ final class Hotkey {
     /// Fingers moving left bring in the next app from the right.
     private func swipe(_ event: CGEvent, _ s: Snapshot) -> Bool {
         let now = CACurrentMediaTime()
-        if now - swipeLast > 0.35 { swipeX = 0; swipeFired = false }   // a new gesture
+        guard let e = NSEvent(cgEvent: event) else { return false }
+        // A new gesture: fingers just touched, or (mice without phases) a pause in the scrolling.
+        if e.phase.contains(.began) || (e.phase.isEmpty && e.momentumPhase.isEmpty && now - swipeLast > 0.3) {
+            swipeX = 0; swipeFired = false
+        }
         swipeLast = now
-        guard fnOnly(event, s), let e = NSEvent(cgEvent: event) else { return false }
+        guard fnOnly(event, s) else { return false }
         if swipeFired { return true }   // swallow the rest of this gesture, momentum included
+        guard e.momentumPhase.isEmpty else { return false }   // coasting after a swipe that didn't cycle
         let dx = Double(e.scrollingDeltaX) * (e.hasPreciseScrollingDeltas ? 1 : 10)
-        guard abs(dx) >= abs(Double(e.scrollingDeltaY)) else { return false }
+        let dy = Double(e.scrollingDeltaY) * (e.hasPreciseScrollingDeltas ? 1 : 10)
+        guard abs(dx) > abs(dy) * 0.5 else { return false }
         swipeX += e.isDirectionInvertedFromDevice ? dx : -dx   // > 0: fingers moving right
-        if abs(swipeX) > 40 {
+        if abs(swipeX) > 18 {
             swipeFired = true
             cycle(forward: swipeX < 0)
         }
         return true
     }
 
-    /// fn + a quick sideways flick of the pointer (one finger on a trackpad) cycles too.
-    private func flicked(_ event: CGEvent, _ s: Snapshot) {
-        guard fnOnly(event, s) else { flick = nil; return }
-        let now = CACurrentMediaTime(), x = Double(event.location.x)
-        guard now - flickFiredAt > 0.4 else { return }
-        guard let f = flick, now - f.start < 0.25 else { flick = (now, x); return }
-        let dx = x - f.x
-        if abs(dx) > 160 {
-            flick = nil
-            flickFiredAt = now
-            cycle(forward: dx < 0)   // flick left → next app from the right
-        }
-    }
 }
 
 /// Whether Drawer is allowed Accessibility *right now*. Runs Drawer's own binary with --trust-check:

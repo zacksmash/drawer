@@ -217,6 +217,25 @@ func track(old: CGRect, new: CGRect, edge: Edge, drawer d: CGRect, lead: CGFloat
 }
 
 let easeOutCubic: (Double) -> Double = { 1 - pow(1 - $0, 3) }   // arrive: fast start, soft landing
+
+/// CSS-style cubic-bezier(x1, y1, x2, y2) easing. y values outside 0…1 overshoot (a bounce).
+func cubicBezier(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> (Double) -> Double {
+    func b(_ t: Double, _ p1: Double, _ p2: Double) -> Double { 3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t }
+    func db(_ t: Double, _ p1: Double, _ p2: Double) -> Double { 3 * (1 - t) * (1 - t) * p1 + 6 * (1 - t) * t * (p2 - p1) + 3 * t * t * (1 - p2) }
+    return { x in
+        guard x > 0 else { return 0 }
+        guard x < 1 else { return 1 }
+        var t = x
+        for _ in 0..<8 {   // Newton: find t where the curve's x equals x
+            let d = db(t, x1, x2)
+            guard abs(d) > 1e-6 else { break }
+            t = min(max(t - (b(t, x1, x2) - x) / d, 0), 1)
+        }
+        return b(t, y1, y2)
+    }
+}
+/// Slides in, overshoots a touch, settles back.
+let easeOutBack = cubicBezier(0.34, 1.4, 0.64, 1)
 let easeInCubic: (Double) -> Double = { $0 * $0 * $0 }           // leave: gentle start, exits at speed
 
 /// Applies window frames on a background queue, always jumping to the most recent request,

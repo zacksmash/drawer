@@ -337,7 +337,10 @@ final class Transition {
             incoming.shadowOpacity = style == .push ? 0 : style == .parallax ? 0.5 : 0.3
             incoming.shadowRadius = style == .parallax ? 28 : 14
             incoming.shadowOffset = .zero
-            incoming.shadowPath = CGPath(roundedRect: root.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            // Shadow only under the window's own shape (its rounded corners and soft edge pixels must stay
+            // clear, or they'd show as dark corners and a dark rim).
+            let r = root.cornerRadius
+            incoming.shadowPath = CGPath(roundedRect: root.bounds.insetBy(dx: 2, dy: 2), cornerWidth: r, cornerHeight: r, transform: nil)
         }
         // Darkening that follows the outgoing window's shape (its rounded corners stay clear).
         let dim = CALayer()
@@ -349,9 +352,13 @@ final class Transition {
         dim.mask = mask
         outgoing.addSublayer(dim)
         // Styles that shrink or turn the pictures need a backdrop, or the real window shows around them.
-        if [.push, .parallax, .flip].contains(style) {
-            root.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
-        }
+        // It's only there mid-way: at the start and end the pictures fill the spot, and a backdrop behind
+        // their rounded corners and soft edges would show as a dark rim.
+        let backdrop = CALayer()
+        backdrop.frame = root.bounds
+        backdrop.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
+        backdrop.opacity = 0
+        if [.push, .parallax, .flip].contains(style) { root.insertSublayer(backdrop, at: 0) }
         if style == .flip {
             var p = CATransform3DIdentity
             p.m34 = -1 / 1200
@@ -381,6 +388,7 @@ final class Transition {
         let step: (Double) -> Void = { p in
             let e = reversed ? 1 - p : p   // progress of the forward animation
             CATransaction.begin(); CATransaction.setDisableActions(true)
+            backdrop.opacity = Float(sin(.pi * min(max(e, 0), 1)))
             switch style {
             case .carousel:
                 set(incoming, x: dir * w * (1 - e))

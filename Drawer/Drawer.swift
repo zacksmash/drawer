@@ -196,10 +196,11 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     return StageLayout(main: main, drawers: drawers)
 }
 
-/// Where a drawer waits, out of sight, before it slides in. macOS won't put a window above the menu bar,
-/// so a top drawer waits below the screen instead and drops in from just above its spot (`topEntry`).
+/// Where a drawer waits, out of sight, before it slides in. macOS won't put a window above the menu bar, and
+/// one parked below the screen still shows a sliver there. So a top drawer waits at the start of its drop,
+/// behind the main window (a plain unhide puts it behind the app in front), and is raised just before it drops.
 func parkedFrame(_ open: CGRect, edge: Edge) -> CGRect {
-    closedFrame(open, edge: edge == .top ? .bottom : edge)
+    edge == .top ? topEntry(open) : closedFrame(open, edge: edge)
 }
 
 /// Where a top drawer starts its drop: a little above its spot, as far as the menu bar allows.
@@ -1009,9 +1010,7 @@ final class Drawer {
         guard let open = after.drawers[pair.id] else { return }
         if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
         bringToFront(app, w)   // drawer in front, so its neighbours can resize behind it
-        // A top drawer is raised while still out of sight below the screen, then appears already in front,
-        // just above its spot, and drops in.
-        if pair.edge == .top { setFrame(w, topEntry(open)) }
+        if pair.edge == .top { setFrame(w, topEntry(open)) }   // the final size may have moved its start
         let start = CGRect(origin: axFrame(w)?.origin ?? parkedFrame(open, edge: pair.edge).origin, size: open.size)
         s.parked = start.origin
         s.expected = open

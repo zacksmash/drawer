@@ -196,6 +196,24 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     return StageLayout(main: main, drawers: drawers)
 }
 
+/// Where a drawer waits, out of sight, before it slides in. macOS won't put a window above the menu bar,
+/// so a top drawer waits below the screen instead and drops in from just above its spot (`topEntry`).
+func parkedFrame(_ open: CGRect, edge: Edge) -> CGRect {
+    closedFrame(open, edge: edge == .top ? .bottom : edge)
+}
+
+/// Where a top drawer starts its drop: a little above its spot, as far as the menu bar allows.
+/// With no room above (its spot is right under the menu bar) it settles up into place from a little below.
+func topEntry(_ open: CGRect) -> CGRect {
+    let primaryH = NSScreen.screens[0].frame.height
+    let screen = NSScreen.screens.first { NSRect(x: $0.frame.minX, y: primaryH - $0.frame.maxY, width: $0.frame.width,
+                                                  height: $0.frame.height).contains(CGPoint(x: open.midX, y: open.midY)) }
+        ?? NSScreen.screens[0]
+    let visibleTop = primaryH - screen.visibleFrame.maxY
+    let room = open.minY - visibleTop
+    return room >= 8 ? open.offsetBy(dx: 0, dy: -min(24, room)) : open.offsetBy(dx: 0, dy: 16)
+}
+
 /// `open` moved just past the screen edge the drawer slides in from.
 func closedFrame(_ open: CGRect, edge: Edge) -> CGRect {
     let primaryH = NSScreen.screens[0].frame.height
@@ -963,7 +981,7 @@ final class Drawer {
 
     /// Where the drawer would open now, parked just off-screen.
     private func park(_ pair: Pair, _ w: AXUIElement) {
-        setFrame(w, closedFrame(openFrame(pair), edge: pair.edge))
+        setFrame(w, parkedFrame(openFrame(pair), edge: pair.edge))
     }
 
     /// Where `pair`'s drawer would sit if it opened now.
@@ -981,25 +999,29 @@ final class Drawer {
         let s = DrawerSession(pair: pair, window: w)
         st.sessions.append(s)
         guard let guess = st.layout().drawers[pair.id] else { return }
-        setFrame(w, closedFrame(guess, edge: pair.edge))
+        setFrame(w, parkedFrame(guess, edge: pair.edge))
         // If the app won't go that small (Rex has a minimum height), find out now, before sliding,
         // so it doesn't stop short and then jump once the size is noticed.
         if probeMinSize(pair.drawerID, window: w, asked: guess.size) {
-            setFrame(w, closedFrame(st.layout().drawers[pair.id] ?? guess, edge: pair.edge))
+            setFrame(w, parkedFrame(st.layout().drawers[pair.id] ?? guess, edge: pair.edge))
         }
         let after = st.layout()
         guard let open = after.drawers[pair.id] else { return }
-        let start = CGRect(origin: axFrame(w)?.origin ?? closedFrame(open, edge: pair.edge).origin, size: open.size)
-        s.parked = start.origin
-        s.expected = open
         if st.tiled { OpenState.save(st.mainID, mainFrame: st.area) }
         bringToFront(app, w)   // drawer in front, so its neighbours can resize behind it
+        // A top drawer is raised while still out of sight below the screen, then appears already in front,
+        // just above its spot, and drops in.
+        if pair.edge == .top { setFrame(w, topEntry(open)) }
+        let start = CGRect(origin: axFrame(w)?.origin ?? parkedFrame(open, edge: pair.edge).origin, size: open.size)
+        s.parked = start.origin
+        s.expected = open
 
         // The new drawer moves on the main thread every screen refresh; the main window and the other drawers
         // are resized on background queues (latest frame wins), so slow apps can't stall the slide.
         let others = st.sessions.filter { $0 !== s }
         st.quietUntil = .infinity
-        st.animator.run(duration: 0.28, curve: easeOutCubic, step: { e in
+        let top = pair.edge == .top
+        st.animator.run(duration: top ? 0.3 : 0.28, curve: top ? glide : easeOutCubic, step: { e in
             let d = lerp(start, open, e)
             setPos(w, d.origin)
             let lead = 40 * (1 - e)   // tapers to zero so the last frame is exact (no snap)
@@ -1216,7 +1238,7 @@ final class Drawer {
             guard let target = l.drawers[s.pair.id], let from = axFrame(s.window) else { continue }
             s.expected = target
             setSize(s.window, target.size)
-            s.parked = s.pair.edge.vertical ? CGPoint(x: target.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: target.minY)
+            s.parked = s.pair.edge == .top ? topEntry(target).origin : s.pair.edge == .bottom ? CGPoint(x: target.minX, y: s.parked.y) : CGPoint(x: s.parked.x, y: target.minY)
             let start = CGRect(origin: from.origin, size: target.size)
             s.resizer.request(s.window, start)
             let anim = Animator()

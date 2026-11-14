@@ -96,6 +96,7 @@ final class Config: ObservableObject {
     @Published var carousels: [Carousel] { didSet { store(carousels, "carousels") } }
     @Published var inset: Double { didSet { d.set(inset, forKey: "inset") } }   // overlay gap to main window edges
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
+    @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // shortcuts act on the app under the pointer
     @Published var carouselFade: Bool { didSet { d.set(carouselFade, forKey: "carouselFade") } }   // needs Screen Recording
 
     private init() {
@@ -117,6 +118,7 @@ final class Config: ObservableObject {
         inset = d.object(forKey: "inset") as? Double ?? 8
         peek = d.object(forKey: "peek") as? Bool ?? true
         carouselFade = d.object(forKey: "carouselFade") as? Bool ?? false
+        hoverTarget = d.object(forKey: "hoverTarget") as? Bool ?? true
     }
 
     private func store<T: Encodable>(_ v: T, _ key: String) {
@@ -154,6 +156,24 @@ final class Config: ObservableObject {
 /// Gap macOS puts between tiled windows (System Settings → Desktop & Dock → "Tiled windows have margins").
 var tileGap: CGFloat {
     (UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: "EnableTiledWindowMargins") as? Bool ?? true) ? 8 : 0
+}
+
+/// The app whose window is under the pointer (topmost ordinary window there), if any. Window bounds and
+/// owners need no Screen Recording permission. Safe off the main thread.
+func appUnderPointer() -> String? {
+    guard let loc = CGEvent(source: nil)?.location,   // global top-left coords, like window bounds
+          let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    let me = ProcessInfo.processInfo.processIdentifier
+    for w in list {   // front to back
+        guard (w[kCGWindowLayer as String] as? Int) == 0,
+              let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
+              (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              let b = w[kCGWindowBounds as String] as? NSDictionary,
+              let r = CGRect(dictionaryRepresentation: b), r.contains(loc) else { continue }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+    return nil
 }
 
 func running(_ id: String) -> NSRunningApplication? {

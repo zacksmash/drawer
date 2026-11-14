@@ -17,6 +17,7 @@ final class Hotkey {
         var resizeHandles: [(id: UUID, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
+        var hoverTarget = true
         var carouselFronts: Set<String> = []   // apps in a carousel (fn + swipe cycles them)
         var peek = true
     }
@@ -35,6 +36,7 @@ final class Hotkey {
     private var swipeX: Double = 0           // fn + horizontal scroll travel in the current gesture
     private var swipeFired = false           // this gesture already cycled
     private var swipeLast: CFTimeInterval = 0
+    private var swipeTarget: String?         // app the current fn-swipe gesture is for
 
     // Main-thread state.
     private var openedByPress: UUID?         // drawer this press opened, closed on release if it was a peek
@@ -67,6 +69,7 @@ final class Hotkey {
         s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
         s.carouselFronts = carousels.memberIDs
+        s.hoverTarget = Config.shared.hoverTarget
         s.peek = Config.shared.peek
         lock.lock(); snap = s; lock.unlock()
     }
@@ -197,17 +200,16 @@ final class Hotkey {
         if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
         let flags = event.flags.intersection(Shortcut.modifierMask)
         guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }),
-              let front = s.front, s.handledFronts.contains(front) else { return false }
+              let front = target(s), s.handledFronts.contains(front) else { return false }
         pressedAt = CACurrentMediaTime()
         pressedKey = key
         DispatchQueue.main.async {
-            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             if carousels.handles(front: front, shortcut: shortcut) {
                 carousels.cycle(front: front, shortcut: shortcut)   // ‹ / › in a carousel app
                 self.openedByPress = nil
                 self.cycledByPress = true
             } else {
-                self.openedByPress = drawer.toggle(shortcut)
+                self.openedByPress = drawer.toggle(shortcut, target: front)
                 self.cycledByPress = false
             }
             self.refresh()
@@ -217,15 +219,19 @@ final class Hotkey {
 
     // MARK: fn + swipe (carousels)
 
-    /// Only the fn key held (no ⌃⌥⇧⌘), in front of a carousel app.
-    private func fnOnly(_ event: CGEvent, _ s: Snapshot) -> Bool {
-        guard let front = s.front, s.carouselFronts.contains(front) else { return false }
-        return event.flags.intersection(Shortcut.modifierMask) == .maskSecondaryFn
+    /// The app a shortcut or swipe is for: the one under the pointer (setting on), else the one in front.
+    private func target(_ s: Snapshot) -> String? {
+        s.hoverTarget ? (appUnderPointer() ?? s.front) : s.front
     }
 
-    private func cycle(forward: Bool) {
+    /// Only the fn key held (no ⌃⌥⇧⌘).
+    private func fnOnly(_ event: CGEvent) -> Bool {
+        event.flags.intersection(Shortcut.modifierMask) == .maskSecondaryFn
+    }
+
+    private func cycle(_ front: String, forward: Bool) {
         DispatchQueue.main.async {
-            carousels.cycle(front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, forward: forward)
+            carousels.cycle(front: front, forward: forward)
             self.refresh()
         }
     }
@@ -237,10 +243,12 @@ final class Hotkey {
         guard let e = NSEvent(cgEvent: event) else { return false }
         // A new gesture: fingers just touched, or (mice without phases) a pause in the scrolling.
         if e.phase.contains(.began) || (e.phase.isEmpty && e.momentumPhase.isEmpty && now - swipeLast > 0.3) {
-            swipeX = 0; swipeFired = false
+            swipeX = 0; swipeFired = false; swipeTarget = nil
         }
         swipeLast = now
-        guard fnOnly(event, s) else { return false }
+        guard fnOnly(event) else { return false }
+        if swipeTarget == nil { swipeTarget = target(s) ?? "" }   // once per gesture
+        guard let front = swipeTarget, s.carouselFronts.contains(front) else { return false }
         if swipeFired { return true }   // swallow the rest of this gesture, momentum included
         guard e.momentumPhase.isEmpty else { return false }   // coasting after a swipe that didn't cycle
         let dx = Double(e.scrollingDeltaX) * (e.hasPreciseScrollingDeltas ? 1 : 10)
@@ -249,7 +257,7 @@ final class Hotkey {
         swipeX += e.isDirectionInvertedFromDevice ? dx : -dx   // > 0: fingers moving right
         if abs(swipeX) > 18 {
             swipeFired = true
-            cycle(forward: swipeX < 0)
+            cycle(front, forward: swipeX < 0)
         }
         return true
     }

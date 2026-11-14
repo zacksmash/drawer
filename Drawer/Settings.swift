@@ -534,6 +534,10 @@ struct GeneralTab: View {
                                          resetTo: .default(for: e))
                     }
                 }
+                Toggle(isOn: $cfg.hoverTarget) {
+                    Text("Shortcuts act on the app under the pointer")
+                    Text("Otherwise they act on the app in front.")
+                }
                 Toggle(isOn: $cfg.peek) {
                     Text("Hold to peek")
                     Text("Hold the shortcut to show the drawer or the next carousel app, and release to go back.")

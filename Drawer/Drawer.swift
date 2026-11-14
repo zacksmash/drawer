@@ -678,15 +678,21 @@ final class Drawer {
 
     /// Handle `shortcut` pressed with `front` frontmost. Returns the drawer it opened (for hold-to-peek).
     @discardableResult
-    func toggle(_ shortcut: Shortcut) -> UUID? {
+    /// `target`: the app the shortcut is for (under the pointer, or in front).
+    func toggle(_ shortcut: Shortcut, target: String?) -> UUID? {
         guard AXIsProcessTrusted() else { promptAccessibility(); return nil }
-        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let front = target
         // In an open drawer's app, act on behalf of its main app.
         let main = stages.values.first { st in st.sessions.contains { $0.pair.drawerID == front } }?.mainID ?? front
         guard let pair = Config.shared.pairs(forMain: main, shortcut: shortcut).first else { return nil }
         if session(pair.id) != nil || pending[pair.id] != nil { close(pair.id); return nil }
         // One app can only be in one drawer at a time: take it from wherever else it's open.
         for st in stages.values { for s in st.sessions where s.pair.drawerID == pair.drawerID { detach(st, s, hide: true) } }
+        // Opening for an app that isn't in front (it's under the pointer): bring it forward first.
+        if let app = running(pair.mainID), !app.isActive, stages[pair.mainID] == nil {
+            lastOwnActivation = CACurrentMediaTime()
+            app.activate()
+        }
         show(pair)
         return pair.id
     }

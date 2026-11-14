@@ -593,6 +593,9 @@ final class Drawer {
     func show(_ pair: Pair) {
         pending[pair.id]?.invalidate()
         popped[pair.drawerID] = nil   // docking it again; no need to remember the moved spot
+        // Start from the configured size every time. A minimum learned earlier can be wrong (e.g. the window
+        // was tiled by macOS, which holds its size for a moment), and it would otherwise stick for good.
+        minSizes[pair.drawerID] = nil
         let started = CACurrentMediaTime()
         var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?

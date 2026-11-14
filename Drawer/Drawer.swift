@@ -1026,9 +1026,12 @@ final class Drawer {
             // The window is on another desktop. There's no public API to move it, but a window restored from
             // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
             if !onCurrentSpace(app, window: w) {
-                // A just-unhidden window can take a moment to show up as on-screen: give it a beat first.
+                // A just-unhidden or just-created window can take a moment to show up as on-screen: give it a
+                // beat first. macOS still lists it for the app while it's on this desktop, so as long as it
+                // does, give it longer: moving it "over" from here would send it off to another desktop.
                 if windowSeenAt == nil { windowSeenAt = CACurrentMediaTime() }
-                if CACurrentMediaTime() - windowSeenAt! < 0.3 { return }
+                let waited = CACurrentMediaTime() - windowSeenAt!
+                if waited < 0.3 || (axWindow(app) != nil && waited < 1.5) { return }
                 spaceMove = (w, CACurrentMediaTime(), false)
                 if spaceOrigin == nil { spaceOrigin = axFrame(w).flatMap { screenFrame(containing: $0).intersects($0) ? $0 : nil } ?? self.openFrame(pair) }
                 setMinimized(w, true)

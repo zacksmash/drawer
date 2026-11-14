@@ -37,16 +37,12 @@ final class CarouselController {
         }
     }
 
-    /// Where the incoming window starts. Windows can't be clipped to the carousel's spot, so it starts
-    /// fully hidden past the screen edge when the spot touches that edge, and otherwise just a hair out,
-    /// so it barely shows outside the spot on its way in.
+    /// Where the incoming window starts: one tile gap out on that side, so it barely moves outside the spot.
     private func entryFrame(_ frame: CGRect, from edge: Edge) -> CGRect {
-        let off = closedFrame(frame, edge: edge)   // just past the screen edge on that side
-        let nudge = min(frame.width * 0.04, 24)
         switch edge {
-        case .left: return frame.minX - off.minX <= frame.width + 1 ? off : frame.offsetBy(dx: -nudge, dy: 0)
-        case .right: return off.minX - frame.minX <= frame.width + 1 ? off : frame.offsetBy(dx: nudge, dy: 0)
-        case .bottom: return off
+        case .left: return frame.offsetBy(dx: -tileGap, dy: 0)
+        case .right: return frame.offsetBy(dx: tileGap, dy: 0)
+        case .bottom: return frame.offsetBy(dx: 0, dy: tileGap)
         }
     }
 

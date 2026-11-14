@@ -13,6 +13,8 @@ final class CarouselController {
     /// peek can back out over it); it's hidden once the key comes up as a tap.
     private var keyHeld = false
     private var underneath: NSRunningApplication?
+    /// The slide in progress, so a peek let go mid-way can turn straight back from where it is.
+    private var sliding: (carousel: UUID, window: AXUIElement, app: NSRunningApplication, from: CGRect, to: CGRect)?
 
     /// Whether `shortcut` cycles a carousel while `front` is in front.
     func handles(front: String?, shortcut: Shortcut) -> Bool {
@@ -79,7 +81,19 @@ final class CarouselController {
     /// The shortcut was held and let go: go back to the app that was showing before it was pressed.
     func endPeek() {
         guard let l = last else { return }
-        if busy.contains(l.carousel) { returnWanted = true; return }   // once the slide in finishes
+        if busy.contains(l.carousel) {
+            if let s = sliding, s.carousel == l.carousel {   // still sliding in: turn straight back from here
+                animator.stop()
+                sliding = nil
+                last = nil
+                retreat(s.window, app: s.app, to: s.from, home: s.to, revealing: running(l.from)) { [weak self] in
+                    self?.busy.remove(l.carousel)
+                }
+            } else {
+                returnWanted = true   // not on screen yet: go back once it's in
+            }
+            return
+        }
         last = nil
         let cur = running(l.to)
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == l.to,
@@ -102,7 +116,7 @@ final class CarouselController {
             if self.returnWanted { self.returnWanted = false; self.endPeek() }
         }
         if reversed { backOut(from, to: to, frame: frame, toward: edge, done: finish) }
-        else { bringIn(to, frame: frame, from: edge, done: finish) }
+        else { bringIn(to, frame: frame, from: edge, carousel: cid, done: finish) }
     }
 
     /// Backwards: `to` goes back in the spot underneath, and `app`'s window backs out toward `edge`
@@ -119,14 +133,23 @@ final class CarouselController {
             back.unhide()
             AXUIElementPerformAction(w, kAXRaiseAction as CFString)   // keep the peeked window on top of it
         }
-        let end = entryFrame(frame, from: edge)
-        animator.run(duration: 0.2, curve: glide, step: { e in
-            setPos(w, lerp(frame, end, e).origin)
-        }) {
-            bringToFront(back, bw)
+        retreat(w, app: app, to: entryFrame(frame, from: edge), home: frame, revealing: back) { done(true) }
+    }
+
+    /// Move `w` straight back from wherever it is to `to`, hide its app, and leave `revealing` in front.
+    private func retreat(_ w: AXUIElement, app: NSRunningApplication, to: CGRect, home: CGRect,
+                         revealing back: NSRunningApplication?, done: @escaping () -> Void) {
+        let here = axFrame(w) ?? home
+        let total = max(abs(home.minX - to.minX) + abs(home.minY - to.minY), 1)
+        let left = abs(here.minX - to.minX) + abs(here.minY - to.minY)
+        animator.run(duration: max(0.06, 0.2 * Double(left / total)), curve: glide, step: { e in
+            setPos(w, lerp(here, to, e).origin)
+        }) { [weak self] in
+            if let back, let bw = axWindow(back) { bringToFront(back, bw) }
             app.hide()
-            setFrame(w, frame)   // back in place for next time
-            done(true)
+            setFrame(w, home)   // back in place for next time
+            self?.underneath = nil
+            done()
         }
     }
 
@@ -143,7 +166,7 @@ final class CarouselController {
 
     /// Launch or unhide `id`, park its window just outside the spot on `edge`, then slide it in.
     /// Not `animated`: put it straight in the spot and in front.
-    private func bringIn(_ id: String, frame: CGRect, from edge: Edge,
+    private func bringIn(_ id: String, frame: CGRect, from edge: Edge, carousel: UUID? = nil,
                          animated: Bool = true, done: @escaping (Bool) -> Void) {
         let started = CACurrentMediaTime()
         var parked = false, reopened = false
@@ -192,9 +215,11 @@ final class CarouselController {
             setSize(w, frame.size)
             let start = CGRect(origin: axFrame(w)?.origin ?? closed.origin, size: frame.size)
             bringToFront(app, w)
+            if let carousel { self.sliding = (carousel, w, app, start, frame) }
             self.animator.run(duration: 0.3, curve: glide, step: { e in
                 setPos(w, lerp(start, frame, e).origin)
             }) {
+                self.sliding = nil
                 setFrame(w, frame)
                 bringToFront(app, w)
                 done(true)

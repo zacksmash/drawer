@@ -140,7 +140,7 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
     let gap = tileGap, inset = Config.shared.inset
     var main = area
     var drawers: [UUID: CGRect] = [:]
-    let tiled = pairs.filter(\.shrinkMain), floating = pairs.filter { !$0.shrinkMain }
+    let tiled = pairs.filter(\.tiles), floating = pairs.filter { !$0.tiles }
 
     // Tiled: sides first (full height), then bottom between them.
     func minSize(_ p: Pair) -> CGSize { minSizes[p.drawerID] ?? .zero }
@@ -164,6 +164,7 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
 
     // Floating: inside what's left of the main window, inset from its edges.
     for p in floating {
+        if p.isFull { drawers[p.id] = main; continue }   // covers it exactly
         let r = main.insetBy(dx: inset, dy: inset)
         switch p.edge {
         case .bottom:
@@ -308,7 +309,7 @@ enum OpenState {
 
 /// One open drawer window.
 final class DrawerSession {
-    let pair: Pair
+    var pair: Pair                     // its size changes while the user drags the drawer's inner edge
     private(set) var window: AXUIElement   // can change: apps like TablePlus swap one window for another
     var parked: CGPoint = .zero      // where macOS actually let the drawer sit off-screen (it pins windows at the edge)
     var docked = false               // fully open; edge drags are blocked and dragging it pops it out
@@ -465,7 +466,7 @@ final class Stage {
         (self.mainID, self.mainWindow, self.area) = (mainID, mainWindow, area)
     }
 
-    var tiled: Bool { sessions.contains { $0.pair.shrinkMain } }
+    var tiled: Bool { sessions.contains { $0.pair.tiles } }
     func layout(_ pairs: [Pair]? = nil) -> StageLayout { stageLayout(area: area, pairs: pairs ?? sessions.map(\.pair)) }
 
     func watchMain(app: NSRunningApplication) {
@@ -513,6 +514,54 @@ final class Drawer {
     private var popped: [String: PoppedWindow] = [:]
 
     var lockedFrames: [CGRect] { stages.values.flatMap { $0.sessions.filter(\.docked).map(\.expected) } }
+
+    /// The strip along each open drawer's inner edge (the one facing the main window) that resizes it.
+    var resizeHandles: [(id: UUID, rect: CGRect)] {
+        stages.values.flatMap { st in st.sessions.filter { $0.docked && !$0.pair.isFull }.map { s -> (UUID, CGRect) in
+            let f = s.expected
+            switch s.pair.edge {
+            case .bottom: return (s.pair.id, CGRect(x: f.minX, y: f.minY - 8, width: f.width, height: 13))
+            case .left: return (s.pair.id, CGRect(x: f.maxX - 5, y: f.minY, width: 13, height: f.height))
+            case .right: return (s.pair.id, CGRect(x: f.minX - 8, y: f.minY, width: 13, height: f.height))
+            }
+        } }
+    }
+
+    /// The user is dragging drawer `id`'s inner edge to `p` (global, top-left origin): resize it (and, for a
+    /// tiled drawer, the main window and its neighbours) to match.
+    func resizeDrawer(_ id: UUID, to p: CGPoint) {
+        guard let (st, s) = session(id), s.docked else { return }
+        let gap = tileGap, inset = Config.shared.inset
+        var size: Double
+        if s.pair.tiles {
+            let a = st.area
+            switch s.pair.edge {
+            case .bottom: size = (a.maxY - p.y) / (a.height - gap)
+            case .left: size = (p.x - a.minX) / (a.width - gap)
+            case .right: size = (a.maxX - p.x) / (a.width - gap)
+            }
+        } else {
+            let m = st.layout().main
+            switch s.pair.edge {
+            case .bottom: size = (m.maxY - inset - p.y) / (m.height - inset)
+            case .left: size = (p.x - m.minX - inset) / (m.width - inset)
+            case .right: size = (m.maxX - inset - p.x) / (m.width - inset)
+            }
+        }
+        size = min(0.85, max(0.15, size))
+        guard abs(size - s.pair.size) > 0.0005 else { return }
+        s.pair.size = size
+        let l = st.layout()
+        st.quietUntil = CACurrentMediaTime() + 0.5
+        if s.pair.tiles { st.setMain(l.main) }
+        for o in st.sessions { if let f = l.drawers[o.pair.id], f != o.expected { o.expected = f; o.resizer.request(o.window, f) } }
+    }
+
+    /// Done dragging: keep the new size for next time.
+    func finishResize(_ id: UUID) {
+        guard let (_, s) = session(id), let i = Config.shared.pairs.firstIndex(where: { $0.id == id }) else { return }
+        Config.shared.pairs[i].size = s.pair.size
+    }
     var mainFrames: [(id: String, frame: CGRect)] {
         stages.values.compactMap { st in st.expectedMain.map { (st.mainID, $0) } }
     }
@@ -563,7 +612,7 @@ final class Drawer {
     /// Hide `st`'s floating drawers at once (no slide): the main app came forward and would cover them.
     /// Tiled drawers sit beside the main window, so they stay.
     private func dropFloating(_ st: Stage) {
-        let floating = st.sessions.filter { !$0.pair.shrinkMain }
+        let floating = st.sessions.filter { !$0.pair.tiles }
         guard !floating.isEmpty else { return }
         if st.animator.isRunning { st.animator.stop() }
         for s in floating {
@@ -571,7 +620,7 @@ final class Drawer {
             s.stopWatching()
             running(s.pair.drawerID)?.hide()
         }
-        st.sessions.removeAll { !$0.pair.shrinkMain }
+        st.sessions.removeAll { !$0.pair.tiles }
         if st.sessions.isEmpty {
             st.pressWatch?.invalidate(); st.pressWatch = nil
             st.stopWatching()
@@ -789,7 +838,7 @@ final class Drawer {
             let d = lerp(start, open, e)
             setPos(w, d.origin)
             let lead = 40 * (1 - e)   // tapers to zero so the last frame is exact (no snap)
-            if pair.shrinkMain {
+            if pair.tiles {
                 st.setMain(track(old: before.main, new: after.main, edge: pair.edge, drawer: d, lead: lead))
                 for o in others { if let a = before.drawers[o.pair.id], let b = after.drawers[o.pair.id], a != b {
                     o.expected = b
@@ -843,7 +892,7 @@ final class Drawer {
             let d = lerp(f, parked, e)
             setPos(s.window, d.origin)
             let lead = 40 * e   // grows from zero so the first frame doesn't jump
-            if s.pair.shrinkMain {
+            if s.pair.tiles {
                 st.setMain(track(old: before.main, new: after.main, edge: s.pair.edge, drawer: d, lead: lead))
                 for o in others { if let a = before.drawers[o.pair.id], let b = after.drawers[o.pair.id], a != b {
                     o.expected = b
@@ -863,10 +912,10 @@ final class Drawer {
         if let main = running(st.mainID) { bringToFront(main, st.mainWindow) }
         if wasFront == st.mainID { return }   // the user was working in the main app: leave them there
         // The user was in a drawer: raise the floating ones over the main window, ending on the one they were in.
-        let floating = st.sessions.filter { !$0.pair.shrinkMain }
+        let floating = st.sessions.filter { !$0.pair.tiles }
         let ordered = floating.filter { $0.pair.drawerID != wasFront } + floating.filter { $0.pair.drawerID == wasFront }
         for o in ordered { if let a = running(o.pair.drawerID) { bringToFront(a, o.window) } }
-        if let o = st.sessions.first(where: { $0.pair.drawerID == wasFront && $0.pair.shrinkMain }),
+        if let o = st.sessions.first(where: { $0.pair.drawerID == wasFront && $0.pair.tiles }),
            let a = running(o.pair.drawerID) { bringToFront(a, o.window) }
     }
 

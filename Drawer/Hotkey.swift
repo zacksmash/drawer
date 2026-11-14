@@ -14,6 +14,7 @@ final class Hotkey {
         var front: String?
         var handledFronts: Set<String> = []   // main apps with a drawer + apps of open drawers
         var lockedFrames: [CGRect] = []
+        var resizeHandles: [(id: UUID, rect: CGRect)] = []
         var mainFrames: [(id: String, frame: CGRect)] = []   // main windows that have drawers open
         var shortcuts: [Shortcut] = []
         var peek = true
@@ -27,6 +28,7 @@ final class Hotkey {
     private var pressedAt: CFTimeInterval?   // set while we're swallowing a press of a shortcut key
     private var pressedKey: Int64 = -1
     private var blockingDrag = false
+    private var resizing: UUID?              // drawer whose inner edge is being dragged
     private let peekThreshold = 0.35
 
     // Main-thread state.
@@ -55,6 +57,7 @@ final class Hotkey {
         s.front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         s.handledFronts = Set(Config.shared.pairs.map(\.mainID)).union(drawer.openAppIDs)
         s.lockedFrames = drawer.lockedFrames
+        s.resizeHandles = drawer.resizeHandles
         s.mainFrames = drawer.mainFrames
         s.shortcuts = Config.shared.allShortcuts
         s.peek = Config.shared.peek
@@ -123,8 +126,14 @@ final class Hotkey {
 
         switch type {
         case .leftMouseDown:
-            // Swallow drags that start on an open drawer's edges, so its app never starts a resize.
             let p = event.location   // global top-left coords, same as Accessibility
+            // The inner edge (facing the main window) resizes the drawer. Drawer does the resizing itself,
+            // so the drawer and the main window move together and the app never fights it.
+            if let h = s.resizeHandles.first(where: { $0.rect.contains(p) }) {
+                resizing = h.id
+                return true
+            }
+            // Swallow drags that start on an open drawer's other edges, so its app never starts a resize.
             blockingDrag = s.lockedFrames.contains { f in
                 f.insetBy(dx: -8, dy: -8).contains(p) && !f.insetBy(dx: 5, dy: 5).contains(p)
             }
@@ -135,8 +144,18 @@ final class Hotkey {
             }
             return blockingDrag
         case .leftMouseDragged:
+            if let id = resizing {
+                let p = event.location
+                DispatchQueue.main.async { drawer.resizeDrawer(id, to: p); self.refresh() }
+                return true
+            }
             return blockingDrag
         case .leftMouseUp:
+            if let id = resizing {
+                resizing = nil
+                DispatchQueue.main.async { drawer.finishResize(id); self.refresh() }
+                return true
+            }
             defer { blockingDrag = false }
             return blockingDrag
         default:

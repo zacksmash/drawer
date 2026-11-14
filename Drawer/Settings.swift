@@ -151,9 +151,13 @@ struct DrawerRow: View {
 }
 
 extension Pair {
-    static let sizes: [(value: Double, label: String)] = [(1.0 / 3, "⅓"), (0.5, "½"), (2.0 / 3, "⅔")]
-    var sizeLabel: String { Self.sizes.min { abs($0.value - size) < abs($1.value - size) }!.label }
-    var summary: String { "\(edge.label) · \(sizeLabel) · \(shrinkMain ? "Tiled" : "Floating")" }
+    static let sizes: [(value: Double, label: String)] = [(1.0 / 3, "⅓"), (0.5, "½"), (2.0 / 3, "⅔"), (1.0, "Full")]
+    /// The preset this size is, or nil if it was dragged to a custom size.
+    var preset: Double? { Self.sizes.first { abs($0.value - size) < 0.005 }?.value }
+    var sizeLabel: String { Self.sizes.first { $0.value == preset }?.label ?? "Custom" }
+    var summary: String {
+        isFull ? "\(edge.label) · Full" : "\(edge.label) · \(sizeLabel) · \(tiles ? "Tiled" : "Floating")"
+    }
 }
 
 // MARK: Drawer editor sheet
@@ -183,15 +187,24 @@ struct DrawerEditor: View {
                         EdgePicker(edge: $draft.edge, taken: takenEdges)
                     }
                     Picker("Size", selection: Binding(
-                        get: { Pair.sizes.min { abs($0.value - draft.size) < abs($1.value - draft.size) }!.value },
-                        set: { draft.size = $0 })) {
+                        get: { draft.preset ?? -1 },
+                        set: { if $0 > 0 { draft.size = $0 } })) {
                         ForEach(Pair.sizes, id: \.value) { Text($0.label).tag($0.value) }
+                        if draft.preset == nil { Text("Custom").tag(-1.0) }
                     }
                     Toggle(isOn: $draft.shrinkMain) {
                         Text("Make room for the drawer")
-                        Text("Resizes the main window so the two sit side by side like tiled windows. When off, the drawer floats over it.")
+                        Text(draft.isFull ? "A full-size drawer covers the main window, so there's no room to make."
+                                          : "Resizes the main window so the two sit side by side like tiled windows. When off, the drawer floats over it.")
                     }
+                    .disabled(draft.isFull)
                 } footer: {
+                    if draft.preset == nil {
+                        Text("Custom size, set by dragging the drawer's inner edge. Pick a size to go back to a preset.")
+                            .foregroundStyle(.secondary)
+                    } else if !draft.isFull {
+                        Text("Drag an open drawer's inner edge to give it a custom size.").foregroundStyle(.secondary)
+                    }
                     if takenEdges.count == Edge.allCases.count {
                         Label("\(appName(draft.mainID)) already has a drawer on every edge.", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
@@ -235,7 +248,7 @@ struct DrawerEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 480, height: 680)
+        .frame(width: 480, height: 720)
         .onChange(of: draft.mainID) { _, _ in
             // Moved to a main app where this edge is taken: pick a free one.
             if takenEdges.contains(draft.edge), let free = Edge.allCases.first(where: { !takenEdges.contains($0) }) {
@@ -299,6 +312,7 @@ struct LayoutPreview: View {
             ZStack(alignment: .topLeading) {
                 window(main, fill: Color(nsColor: .windowBackgroundColor))
                 AppIcon(id: pair.mainID, size: 26).position(x: visibleMain(main, drawer).midX, y: visibleMain(main, drawer).midY)
+                    .opacity(pair.isFull ? 0 : 1)   // fully covered
                 window(drawer, fill: Color.accentColor.opacity(0.35))
                     .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
                 AppIcon(id: pair.drawerID, size: 26).position(x: drawer.midX, y: drawer.midY)
@@ -319,7 +333,7 @@ struct LayoutPreview: View {
 
     /// Part of the main window not covered by the drawer (where its icon goes).
     private func visibleMain(_ m: CGRect, _ d: CGRect) -> CGRect {
-        guard !pair.shrinkMain else { return m }
+        guard !pair.tiles else { return m }
         switch pair.edge {
         case .bottom: return CGRect(x: m.minX, y: m.minY, width: m.width, height: d.minY - m.minY)
         case .left: return CGRect(x: d.maxX, y: m.minY, width: m.maxX - d.maxX, height: m.height)
@@ -328,7 +342,8 @@ struct LayoutPreview: View {
     }
 
     private func drawerRect(_ w: CGFloat, _ h: CGFloat, _ gap: CGFloat) -> CGRect {
-        let inset: CGFloat = pair.shrinkMain ? 0 : 6
+        if pair.isFull { return CGRect(x: 0, y: 0, width: w, height: h) }
+        let inset: CGFloat = pair.tiles ? 0 : 6
         switch pair.edge {
         case .bottom:
             let dh = (h - gap) * pair.size
@@ -343,7 +358,7 @@ struct LayoutPreview: View {
     }
 
     private func mainRect(_ w: CGFloat, _ h: CGFloat, _ gap: CGFloat) -> CGRect {
-        guard pair.shrinkMain else { return CGRect(x: 0, y: 0, width: w, height: h) }
+        guard pair.tiles else { return CGRect(x: 0, y: 0, width: w, height: h) }
         let d = drawerRect(w, h, gap)
         switch pair.edge {
         case .bottom: return CGRect(x: 0, y: 0, width: w, height: d.minY - gap)

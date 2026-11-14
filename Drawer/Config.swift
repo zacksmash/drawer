@@ -19,6 +19,11 @@ struct Pair: Codable, Identifiable, Equatable {
     var shortcut: Shortcut?         // nil = use the edge's shortcut
 
     var effectiveShortcut: Shortcut { shortcut ?? Config.shared.shortcut(for: edge) }
+
+    /// Covers the whole main window, like swapping the app out.
+    var isFull: Bool { size >= 0.999 }
+    /// Sits beside the main window, which shrinks to make room. A full-size drawer always floats.
+    var tiles: Bool { shrinkMain && !isFull }
 }
 
 struct Shortcut: Codable, Hashable {

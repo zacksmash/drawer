@@ -87,6 +87,12 @@ struct DrawersTab: View {
                 }
             }
             Section {
+                Toggle(isOn: $cfg.drawerPeeks) {
+                    Text("Peek at the edges")
+                    Text("Point near the middle of the main window's edge and a peek comes out. Click it to open that drawer; on an open drawer, its peek closes it.")
+                }
+            }
+            Section {
             } footer: {
                 HStack(alignment: .top) {
                     Text("Each drawer opens with its shortcut while its main app is in front.")
@@ -97,7 +103,7 @@ struct DrawersTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: min(620, 110 + CGFloat(mains.count) * 50 + CGFloat(max(cfg.pairs.count, 1)) * 58))
+        .frame(width: 540, height: min(620, 180 + CGFloat(mains.count) * 50 + CGFloat(max(cfg.pairs.count, 1)) * 58))
         .sheet(item: $editing) { pair in
             DrawerEditor(draft: pair, isNew: isNew) { result in
                 switch result {
@@ -217,9 +223,28 @@ struct CarouselsTab: View {
                 }
             }
             Section {
+                Picker(selection: $cfg.switcher) {
+                    ForEach(SwitcherPlacement.allCases) { Text($0.label).tag($0) }
+                } label: {
+                    Text("Switcher")
+                    Text("A row of the carousel's app icons on the app showing. Click one to switch straight to it.")
+                }
+                if cfg.switcher != .off {
+                    Picker("Show", selection: $cfg.switcherShow) {
+                        ForEach(SwitcherShow.allCases) { Text($0.label).tag($0) }
+                    }
+                    LabeledContent {
+                        ShortcutRecorder(shortcut: $cfg.switcherShortcut, resetTo: .switcherDefault)
+                    } label: {
+                        Text("Shortcut")
+                        Text("Shows or hides it. Hold to show it until you let go.")
+                    }
+                }
+            }
+            Section {
             } footer: {
                 HStack(alignment: .top) {
-                    Text("Apps in a carousel take turns in the same spot. While one is in front, \(cfg.shortcut(for: .right).display) slides in the next and \(cfg.shortcut(for: .left).display) the previous, wrapping around. Move or resize whichever is showing and the rest follow.")
+                    Text("Apps in a carousel take turns in the same spot. While one is in front, \(cfg.shortcut(for: .right).display) switches to the next and \(cfg.shortcut(for: .left).display) the previous, wrapping around. Move or resize whichever is showing and the rest follow.")
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Add Carousel…") { cfg.carousels.append(Carousel(mainID: "")) }
@@ -227,7 +252,7 @@ struct CarouselsTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: min(680, 140 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
+        .frame(width: 540, height: min(680, 290 + CGFloat(cfg.carousels.reduce(0) { $0 + $1.appIDs.count + 2 }) * 44 + CGFloat(cfg.carousels.count) * 50))
     }
 
     /// Why part of this carousel won't work as expected, if so.

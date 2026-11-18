@@ -16,6 +16,18 @@ func axWindow(_ app: NSRunningApplication) -> AXUIElement? {
     return nil
 }
 
+/// The app's window to work with while it's showing: its main window if that's on screen, else its frontmost
+/// on-screen one (the main window can be one it only hid, as many apps do on close).
+func visibleWindow(_ app: NSRunningApplication) -> AXUIElement? {
+    if let w = axWindow(app), !isMinimized(w), isOnScreen(w) { return w }
+    let el = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(el, 0.25)
+    var list: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &list) == .success,
+          let wins = list as? [AXUIElement] else { return nil }
+    return wins.first { isStandardWindow($0) && !isMinimized($0) && isOnScreen($0) }   // front to back
+}
+
 func axFrame(_ w: AXUIElement) -> CGRect? {
     var p: CFTypeRef?, s: CFTypeRef?
     guard AXUIElementCopyAttributeValue(w, kAXPositionAttribute as CFString, &p) == .success,
@@ -50,10 +62,15 @@ func largestWindow(of app: NSRunningApplication) -> CGRect? {
         .max { $0.width * $0.height < $1.width * $1.height }
 }
 
+/// Every display's frame (Accessibility coordinates).
+func screenFrames() -> [CGRect] {
+    let primaryH = NSScreen.screens[0].frame.height
+    return NSScreen.screens.map { sf in CGRect(x: sf.frame.minX, y: primaryH - sf.frame.maxY, width: sf.frame.width, height: sf.frame.height) }
+}
+
 /// The screen holding most of `r` (Accessibility coordinates).
 func screenFrame(containing r: CGRect) -> CGRect {
-    let primaryH = NSScreen.screens[0].frame.height
-    let frames = NSScreen.screens.map { sf in CGRect(x: sf.frame.minX, y: primaryH - sf.frame.maxY, width: sf.frame.width, height: sf.frame.height) }
+    let frames = screenFrames()
     return frames.max { $0.intersection(r).width * $0.intersection(r).height < $1.intersection(r).width * $1.intersection(r).height } ?? frames[0]
 }
 
@@ -89,9 +106,14 @@ func setMinimized(_ w: AXUIElement, _ on: Bool) {
     AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, on ? kCFBooleanTrue : kCFBooleanFalse)
 }
 
-/// Whether `window` (of `app`) is on the current desktop. Matched by frame: some apps (TablePlus) keep thin
-/// helper windows on screen everywhere, so "the app has a window here" isn't enough.
+/// Whether `window` (of `app`) is on the current desktop (showing, even if covered or parked off-screen).
+/// By its window number; matching by frame instead could miss (the window server and Accessibility can disagree
+/// on where a window is for a moment, or by a few points), which looked like "on another desktop" and ended in
+/// a needless warning.
 func onCurrentSpace(_ app: NSRunningApplication, window: AXUIElement) -> Bool {
+    if windowNumber(window) != nil { return isOnScreen(window) }
+    // No number for it: match by frame. Not just "the app has a window here": some apps (TablePlus) keep thin
+    // helper windows on screen everywhere.
     guard let f = axFrame(window) else { return false }
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
     return list.contains { w in
@@ -99,6 +121,66 @@ func onCurrentSpace(_ app: NSRunningApplication, window: AXUIElement) -> Bool {
               let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b) else { return false }
         return near(r, f, within: 4)
     }
+}
+
+// Window-server reads (private, read-only and long-stable) to tell which desktop a window is on. Hidden and
+// minimised windows report none, so ask while the window is showing.
+@_silgen_name("CGSMainConnectionID") private func CGSMainConnectionID() -> Int32
+@_silgen_name("CGSCopySpacesForWindows") private func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ wids: CFArray) -> Unmanaged<CFArray>?
+@_silgen_name("CGSCopyManagedDisplaySpaces") private func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> Unmanaged<CFArray>?
+@_silgen_name("_AXUIElementGetWindow") private func _AXUIElementGetWindow(_ el: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
+
+/// The window server's number for `w`.
+func windowNumber(_ w: AXUIElement) -> CGWindowID? {
+    var wid: CGWindowID = 0
+    return _AXUIElementGetWindow(w, &wid) == .success && wid != 0 ? wid : nil
+}
+
+/// Whether `w` is on screen now (on a desktop showing, not hidden or minimised), even if covered.
+func isOnScreen(_ w: AXUIElement) -> Bool {
+    guard let wid = windowNumber(w),
+          let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]] else { return false }
+    return (info.first?[kCGWindowIsOnscreen as String] as? Bool) == true
+}
+
+/// The desktops (Spaces) `w` is on while it's showing; empty if it's hidden or minimised.
+func desktops(of w: AXUIElement) -> Set<UInt64> {
+    guard let wid = windowNumber(w),
+          let list = CGSCopySpacesForWindows(CGSMainConnectionID(), 7, [wid] as CFArray)?.takeRetainedValue() as? [NSNumber]
+    else { return [] }
+    return Set(list.map(\.uint64Value))
+}
+
+/// The desktop showing on each display now.
+func visibleDesktops() -> Set<UInt64> {
+    let displays = CGSCopyManagedDisplaySpaces(CGSMainConnectionID())?.takeRetainedValue() as? [[String: Any]] ?? []
+    return Set(displays.compactMap { (($0["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? NSNumber)?.uint64Value })
+}
+
+/// Bring `w` over from another desktop. There's no public API to move a window between desktops, but one
+/// restored from the Dock lands on the current desktop: minimise it over there (out of sight), `place` it while
+/// it's minimised, then restore it here. If it doesn't come over, it's put at `fallback` over there (not left
+/// parked off-screen) and `done(false)`. Invalidate the returned timer to give up.
+func bringOver(_ app: NSRunningApplication, _ w: AXUIElement, fallback: CGRect?, place: @escaping () -> Void,
+               done: @escaping (Bool) -> Void) -> Timer {
+    if app.isHidden { app.unhide() }   // unhiding without activating leaves it on its own desktop
+    if !isMinimized(w) { setMinimized(w, true) }
+    let started = CACurrentMediaTime()
+    var restoredAt: CFTimeInterval?
+    let t = Timer(timeInterval: 0.016, repeats: true) { t in
+        let now = CACurrentMediaTime()
+        guard let at = restoredAt else {
+            guard isMinimized(w) || now - started > 1 else { return }
+            place()
+            setMinimized(w, false)
+            restoredAt = now
+            return
+        }
+        if onCurrentSpace(app, window: w) { t.invalidate(); done(true) }
+        else if now - at > 2 { t.invalidate(); if let fallback { setFrame(w, fallback) }; done(false) }
+    }
+    RunLoop.main.add(t, forMode: .common)
+    return t
 }
 
 /// Same spot and size, give or take a few points.
@@ -210,14 +292,24 @@ func stageLayout(area: CGRect, pairs: [Pair]) -> StageLayout {
 
 /// `open` moved just past the screen edge the drawer slides in from.
 func closedFrame(_ open: CGRect, edge: Edge) -> CGRect {
-    let primaryH = NSScreen.screens[0].frame.height
-    let center = CGPoint(x: open.midX, y: primaryH - open.midY)
-    let sf = (NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.screens[0]).frame
-    let screen = CGRect(x: sf.minX, y: primaryH - sf.maxY, width: sf.width, height: sf.height)
+    let screen = screenFrame(containing: open)
+    let past: CGRect
     switch edge {
-    case .bottom: return open.offsetBy(dx: 0, dy: screen.maxY - open.minY)
-    case .left: return open.offsetBy(dx: screen.minX - open.maxX, dy: 0)
-    case .right: return open.offsetBy(dx: screen.maxX - open.minX, dy: 0)
+    case .bottom: past = open.offsetBy(dx: 0, dy: screen.maxY - open.minY)
+    case .left: past = open.offsetBy(dx: screen.minX - open.maxX, dy: 0)
+    case .right: past = open.offsetBy(dx: screen.maxX - open.minX, dy: 0)
+    }
+    // Another display on that side: parked past the edge, the window would sit on that display, and with
+    // separate Spaces join the desktop showing there, which may be gone from view by the next open. Keep most
+    // of it on its own display instead: macOS draws a window only on the display holding most of it, so it
+    // still slides out of the edge, just starting part of the way out.
+    guard NSScreen.screensHaveSeparateSpaces, screenFrames().contains(where: { $0 != screen && $0.intersects(past) })
+    else { return past }
+    let keep: CGFloat = 0.55
+    switch edge {
+    case .bottom: return open.offsetBy(dx: 0, dy: screen.maxY - open.minY - open.height * keep)
+    case .left: return open.offsetBy(dx: screen.minX - open.maxX + open.width * keep, dy: 0)
+    case .right: return open.offsetBy(dx: screen.maxX - open.minX - open.width * keep, dy: 0)
     }
 }
 
@@ -832,6 +924,24 @@ final class Drawer {
             OpenState.clear(st.mainID)
         }
     }
+    /// The main app whose drawers go with `app` in front: itself, or the main app of the drawer it's open in.
+    func mainApp(for app: String?) -> String? {
+        guard let app else { return nil }
+        if let st = stages.values.first(where: { $0.sessions.contains { $0.pair.drawerID == app } }) { return st.mainID }
+        return Config.shared.pairs.contains { $0.mainID == app } ? app : nil
+    }
+
+    /// Where `pair`'s drawer sits while it's open and settled (Accessibility coords).
+    func dockedFrame(_ id: UUID) -> CGRect? {
+        guard let (_, s) = session(id), s.docked else { return nil }
+        return s.expected
+    }
+
+    /// Whether `pair`'s drawer is open or on its way.
+    func isOpen(_ id: UUID) -> Bool {
+        pending[id] != nil || stages.values.contains { $0.sessions.contains { $0.pair.id == id } }
+    }
+
     var openAppIDs: Set<String> { Set(stages.values.flatMap { st in st.sessions.map(\.pair.drawerID) + [st.mainID] }) }
 
     private func session(_ id: UUID) -> (Stage, DrawerSession)? {
@@ -846,6 +956,14 @@ final class Drawer {
         let main = stages.values.first { st in st.sessions.contains { $0.pair.drawerID == target } }?.mainID ?? target
         guard let pair = Config.shared.pairs(forMain: main, shortcut: shortcut).first else { return nil }
         if session(pair.id) != nil || pending[pair.id] != nil { close(pair.id); return nil }
+        open(pair)
+        return pair.id
+    }
+
+    /// Open `pair`'s drawer if it isn't already (its shortcut, or its peek was touched).
+    func open(_ pair: Pair) {
+        guard AXIsProcessTrusted() else { promptAccessibility(); return }
+        guard session(pair.id) == nil, pending[pair.id] == nil else { return }
         // One app can only be in one drawer at a time: take it from wherever else it's open.
         for st in stages.values { for s in st.sessions where s.pair.drawerID == pair.drawerID { detach(st, s, hide: true) } }
         // Opening for an app that isn't in front (it's under the pointer): bring it forward first.
@@ -854,7 +972,6 @@ final class Drawer {
             app.activate()
         }
         show(pair)
-        return pair.id
     }
 
     /// Main app → apps of its open overlay (floating) drawers.
@@ -940,8 +1057,6 @@ final class Drawer {
         let started = CACurrentMediaTime()
         var reopened = false, parked = false
         var windowSeenAt: CFTimeInterval?
-        var spaceMove: (window: AXUIElement, at: CFTimeInterval, restored: Bool)?
-        var spaceOrigin: CGRect?   // where that window was, to put it back if it can't be brought over
         var created: AXUIElement?  // the window the app just created, caught as it appeared
 
         if running(pair.drawerID) == nil {
@@ -974,11 +1089,9 @@ final class Drawer {
                 // (see below).
                 if reopened, elapsed > 0.8, axWindow(app) == nil, let last = self.lastWindows[pair.drawerID],
                    axFrame(last) != nil {
-                    spaceOrigin = self.openFrame(pair)   // if it can't come over, at least it's in view over there
-                    if app.isHidden { app.unhide() }   // unhiding without activating stays on this desktop
-                    if !isMinimized(last) { setMinimized(last, true) }
-                    spaceMove = (last, CACurrentMediaTime(), false)
-                    parked = true
+                    t.invalidate()
+                    // If it can't come over, at least it's in view over there.
+                    self.fetch(pair, app: app, window: last, fallback: self.openFrame(pair))
                     return
                 }
                 guard let w = axWindow(app) else {
@@ -1010,37 +1123,11 @@ final class Drawer {
                 return
             }
             if app.isHidden { app.unhide(); return }
-            // Moving the window here from another desktop (see below): wait for it to land.
-            if let m = spaceMove {
-                let now = CACurrentMediaTime()
-                if !m.restored {
-                    // Minimised (it happened on its own desktop, out of sight): park it off-screen and restore it here.
-                    guard isMinimized(m.window) || now - m.at > 1 else { return }
-                    self.park(pair, m.window)
-                    setMinimized(m.window, false)
-                    spaceMove = (m.window, now, true)
-                    return
-                }
-                if !onCurrentSpace(app, window: m.window) {
-                    if now - m.at > 2 {
-                        t.invalidate(); self.pending[pair.id] = nil
-                        if let o = spaceOrigin { setFrame(m.window, o) }   // not left parked off-screen over there
-                        self.warnOtherSpace(pair.drawerID)
-                    }
-                    return
-                }
-                t.invalidate()
-                self.pending[pair.id] = nil
-                self.park(pair, m.window)
-                self.present(pair, app: app, window: m.window)
-                return
-            }
             // macOS only lists an app's windows on this desktop. A window it just created can land on another
             // one (TablePlus, reopened while running with no window, opens it on the desktop it was last on):
             // our handle to it still works, so go on with that one and bring it over below.
             guard let w = axWindow(app) ?? created.flatMap({ axFrame($0) != nil ? $0 : nil }) else { return }
-            // The window is on another desktop. There's no public API to move it, but a window restored from
-            // the Dock lands on the current desktop: minimise it (out of sight over there), then restore it here.
+            // The window is on another desktop: bring it over.
             if !onCurrentSpace(app, window: w) {
                 // A just-unhidden or just-created window can take a moment to show up as on-screen: give it a
                 // beat first. macOS still lists it for the app while it's on this desktop, so as long as it
@@ -1048,9 +1135,9 @@ final class Drawer {
                 if windowSeenAt == nil { windowSeenAt = CACurrentMediaTime() }
                 let waited = CACurrentMediaTime() - windowSeenAt!
                 if waited < 0.3 || (axWindow(app) != nil && waited < 1.5) { return }
-                spaceMove = (w, CACurrentMediaTime(), false)
-                if spaceOrigin == nil { spaceOrigin = axFrame(w).flatMap { screenFrame(containing: $0).intersects($0) ? $0 : nil } ?? self.openFrame(pair) }
-                setMinimized(w, true)
+                t.invalidate()
+                let fallback = axFrame(w).flatMap { screenFrame(containing: $0).intersects($0) ? $0 : nil } ?? self.openFrame(pair)
+                self.fetch(pair, app: app, window: w, fallback: fallback)
                 return
             }
             t.invalidate()
@@ -1060,6 +1147,18 @@ final class Drawer {
         RunLoop.main.add(t, forMode: .common)
         pending[pair.id] = t
         t.fire()   // first check right away
+    }
+
+    /// Bring the drawer's window over from another desktop, parked off-screen, then slide it in.
+    private func fetch(_ pair: Pair, app: NSRunningApplication, window w: AXUIElement, fallback: CGRect) {
+        creationWatchers[pair.id] = nil   // the window it's watching for is this one
+        pending[pair.id] = bringOver(app, w, fallback: fallback, place: { [weak self] in self?.park(pair, w) }) { [weak self] ok in
+            guard let self else { return }
+            self.pending[pair.id] = nil
+            guard ok else { self.warnOtherSpace(pair.drawerID); return }
+            self.park(pair, w)
+            self.present(pair, app: app, window: w)
+        }
     }
 
     /// Stage for `mainID`, created from the main window's current frame if none is open.
@@ -1386,7 +1485,7 @@ final class Drawer {
 
     // MARK: Misc
 
-    private func warnOtherSpace(_ id: String) {
+    func warnOtherSpace(_ id: String) {
         guard warned.insert(id).inserted else { return }
         let alert = NSAlert()
         alert.messageText = "\(appName(id))'s window is on another desktop"

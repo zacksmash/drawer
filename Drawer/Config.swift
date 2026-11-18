@@ -67,6 +67,20 @@ struct Carousel: Codable, Identifiable, Equatable {
     var members: [String] { [mainID] + appIDs }
 }
 
+/// Where the carousel switcher (a row of its app icons) sits on the app showing now.
+enum SwitcherPlacement: String, CaseIterable, Identifiable {
+    case bottom, top, off
+    var id: Self { self }
+    var label: String { switch self { case .bottom: "Bottom"; case .top: "Top"; case .off: "Off" } }
+}
+
+/// When the carousel switcher shows. Its shortcut shows it in any of these.
+enum SwitcherShow: String, CaseIterable, Identifiable {
+    case hover, shortcut, always
+    var id: Self { self }
+    var label: String { switch self { case .hover: "Pointer near its edge"; case .shortcut: "Shortcut only"; case .always: "Always" } }
+}
+
 struct Shortcut: Codable, Hashable {
     var keyCode: Int
     var flags: UInt64               // CGEventFlags subset: control/option/shift/command/fn
@@ -82,6 +96,7 @@ struct Shortcut: Codable, Hashable {
         case .right: return fnControl(kVK_ANSI_Period)
         }
     }
+    static let switcherDefault = fnControl(kVK_ANSI_S)
     static let modifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand, .maskSecondaryFn]
 
     var cgFlags: CGEventFlags { CGEventFlags(rawValue: flags) }
@@ -136,6 +151,10 @@ final class Config: ObservableObject {
     @Published var peek: Bool { didSet { d.set(peek, forKey: "peek") } }        // hold shortcut to peek
     @Published var hoverTarget: Bool { didSet { d.set(hoverTarget, forKey: "hoverTarget") } }   // carousel shortcuts and swipes act on the carousel under the pointer
     @Published var openInDrawer: Bool { didSet { d.set(openInDrawer, forKey: "openInDrawer") } }   // switching to a drawer app opens its drawer
+    @Published var drawerPeeks: Bool { didSet { d.set(drawerPeeks, forKey: "drawerPeeks") } }   // peek at the main window's edges
+    @Published var switcher: SwitcherPlacement { didSet { d.set(switcher.rawValue, forKey: "switcher") } }
+    @Published var switcherShow: SwitcherShow { didSet { d.set(switcherShow.rawValue, forKey: "switcherShow") } }
+    @Published var switcherShortcut: Shortcut { didSet { store(switcherShortcut, "switcherShortcut") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -149,6 +168,10 @@ final class Config: ObservableObject {
         peek = d.object(forKey: "peek") as? Bool ?? true
         hoverTarget = d.object(forKey: "hoverTarget") as? Bool ?? true
         openInDrawer = d.object(forKey: "openInDrawer") as? Bool ?? true
+        drawerPeeks = d.object(forKey: "drawerPeeks") as? Bool ?? true
+        switcher = d.string(forKey: "switcher").flatMap(SwitcherPlacement.init) ?? .bottom
+        switcherShow = d.string(forKey: "switcherShow").flatMap(SwitcherShow.init) ?? .hover
+        switcherShortcut = load("switcherShortcut") ?? .switcherDefault
     }
 
     private func store<T: Encodable>(_ v: T, _ key: String) {

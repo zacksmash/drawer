@@ -26,7 +26,7 @@ Pick a **main app** (your editor, browser, whatever you live in) and give it **d
 
 - **Overlay**: the drawer slides over the main window, like a pull-down terminal.
 - **Make room**: the drawer tiles beside it and the main window shrinks to fit, then grows back when it closes.
-- **Carousel**: apps take turns in one spot. Next and previous slide the next app in over the current one.
+- **Carousel**: apps take turns in one spot. Next and previous switch to the next app in place, with a small dock showing which.
 
 ## Install
 
@@ -78,6 +78,7 @@ Then, with the main app in front:
 Change them under **General → Keyboard**, or give a single drawer its own shortcut.
 
 - **Hold to peek**: hold the shortcut to show the drawer, let go to hide it.
+- **Edge peeks**: point near the middle of the main window's left, bottom or right edge and a small arc peeks out with a chevron. Point at it and it grows into the drawer app's icon; click to open that drawer. While it's open, the same peek closes it; for an overlay drawer, which covers that edge, it's on the drawer's inner edge (top of a bottom drawer, right side of a left one) (Drawers → Peek at the edges).
 - **Resize**: drag the drawer's inner edge (the one facing the main window). The new size is saved. **Double-click** that edge to go back to the previous size.
 - **Traffic lights** on an open drawer do drawer things. <kbd>⌥</kbd>-click for the usual behaviour.
   - 🔴 slides the drawer away. The app keeps its window and state.
@@ -97,10 +98,14 @@ While any app in the carousel is in front, or under the pointer (General → Car
 
 | Input | Does |
 | --- | --- |
-| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>.</kbd> | Next app, slides in from the right |
-| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>,</kbd> | Previous app, slides in from the left |
+| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>.</kbd> | Next app |
+| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>,</kbd> | Previous app |
 | <kbd>fn</kbd> + two-finger swipe | Next or previous (one finger on a Magic Mouse) |
 | Hold the shortcut | Peek at the next app, let go to come back |
+| Click an icon in the switcher | Switches straight to that app |
+| <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>S</kbd> | Shows or hides the switcher |
+
+The **switcher** is a small row of the carousel's app icons on the app showing now. By default a small arc peeks up when the pointer nears the middle of the window's bottom edge; touch it with the pointer and the switcher springs open. Move away and it drops back to the peek, which stays while the pointer is still in that area and tucks away a second after it leaves. It stays open while a click switches apps. It also opens on <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>S</kbd> (hold it to show the switcher until you let go). Under **Carousels** you can move it to the top, show it always or only on the shortcut, change the shortcut, or turn it off.
 
 Move or resize whichever app is showing and the rest follow. The carousel's spot is wherever the current app's window is.
 
@@ -111,7 +116,8 @@ Move or resize whichever app is showing and the rest follow. The carousel's spot
 
 - Drawer only moves and resizes windows through the Accessibility API. It never injects into or modifies other apps.
 - Apps with a minimum window size (some won't go below a certain height) are fitted as closely as they allow.
-- A window on another desktop (Space) is brought over to the current one before it slides in. If macOS won't allow it, Drawer suggests assigning that app to **All Desktops** (right-click its Dock icon → Options).
+- A window on another desktop (Space) is brought over to the current one before it slides in, for drawers and carousels alike. If macOS won't allow it, Drawer suggests assigning that app to **All Desktops** (right-click its Dock icon → Options).
+- With several displays, a drawer whose edge borders another display stays mostly on its own display while closed, so it can't wander onto the other display's desktop. It slides out of that edge starting part of the way out.
 - Built and tested on macOS 27. It needs macOS 14 or later.
 
 ## Support

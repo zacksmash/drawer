@@ -22,6 +22,7 @@ final class Hotkey {
         var hoverTarget = true
         var carouselFronts: Set<String> = []   // apps in a carousel (fn + swipe cycles them)
         var peek = true
+        var switcherShortcut: Shortcut?        // shows the carousel switcher (switcher on)
     }
 
     private let lock = NSLock()
@@ -44,6 +45,7 @@ final class Hotkey {
     // Main-thread state.
     private var openedByPress: UUID?         // drawer this press opened, closed on release if it was a peek
     private var cycledByPress = false        // this press cycled a carousel, undone on release if it was a peek
+    private var revealedByPress = false      // this press showed the switcher, hidden on release if it was held
 
     func install() {
         startRefreshing()
@@ -76,6 +78,7 @@ final class Hotkey {
         s.shortcuts = Config.shared.allShortcuts
         s.hoverTarget = Config.shared.hoverTarget
         s.peek = Config.shared.peek
+        s.switcherShortcut = Config.shared.switcher == .off ? nil : Config.shared.switcherShortcut
         lock.lock(); snap = s; lock.unlock()
         refreshLights()
     }
@@ -171,6 +174,7 @@ final class Hotkey {
             // The drawer and main window frames only count where those windows actually are: not on another
             // desktop (Space), and not under some other app's window.
             guard !s.stageApps.isEmpty, let owner = appUnderPointer(), s.stageApps.contains(owner) else { return false }
+            if PanelHits.contains(p) { return false }   // a click on a peek or the switcher: theirs, not the window under them
             // A drawer's traffic lights do Drawer things (⌥-click for the usual). Acts on release, like a button.
             if !event.flags.contains(.maskAlternate), let l = currentLights().first(where: { $0.rect.contains(p) }) {
                 pressedLight = l
@@ -247,14 +251,28 @@ final class Hotkey {
             DispatchQueue.main.async {
                 if peeked, let id = self.openedByPress { drawer.close(id) }
                 if peeked && self.cycledByPress { carousels.endPeek() }
+                if peeked && self.revealedByPress { switcher.reveal(false) }
                 self.openedByPress = nil
                 self.cycledByPress = false
+                self.revealedByPress = false
             }
             return true
         }
 
         if pressedAt != nil, key == pressedKey { return true }   // auto-repeat while held
         let flags = event.flags.intersection(Shortcut.modifierMask)
+        // The switcher's shortcut, in a carousel app.
+        if let sc = s.switcherShortcut, Int64(sc.keyCode) == key, sc.cgFlags == flags,
+           s.front.map(s.carouselFronts.contains) == true {
+            pressedAt = CACurrentMediaTime()
+            pressedKey = key
+            DispatchQueue.main.async {
+                self.openedByPress = nil
+                self.cycledByPress = false
+                self.revealedByPress = switcher.toggle()
+            }
+            return true
+        }
         guard let shortcut = s.shortcuts.first(where: { Int64($0.keyCode) == key && $0.cgFlags == flags }) else { return false }
         // Carousels follow the pointer (setting on); drawers always go with the app in front.
         let hovered = target(s).flatMap { s.carouselFronts.contains($0) ? $0 : nil }

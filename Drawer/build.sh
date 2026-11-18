@@ -6,7 +6,7 @@ APP=build/Drawer.app
 rm -rf "$APP" build/Drawer.iconset
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/Drawer.iconset
 
-swiftc -O Config.swift Drawer.swift Carousel.swift Hotkey.swift Settings.swift main.swift -o "$APP/Contents/MacOS/Drawer"
+swiftc -O Config.swift Drawer.swift Carousel.swift Switcher.swift Peeks.swift Hotkey.swift Settings.swift main.swift -o "$APP/Contents/MacOS/Drawer"
 
 # Icon
 swift Icon.swift build/icon.png
@@ -26,7 +26,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Drawer</string>
   <key>CFBundleIconFile</key><string>Drawer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3</string>
+  <key>CFBundleShortVersionString</key><string>0.4</string>
   <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>

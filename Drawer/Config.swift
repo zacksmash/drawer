@@ -211,9 +211,9 @@ var tileGap: CGFloat {
     (UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: "EnableTiledWindowMargins") as? Bool ?? true) ? 8 : 0
 }
 
-/// The app whose window is under the pointer (topmost ordinary window there), if any. Window bounds and
-/// owners need no Screen Recording permission. Safe off the main thread.
-func appUnderPointer() -> String? {
+/// The topmost ordinary window under the pointer (not Drawer's own): its owner and window number. Window bounds
+/// and owners need no Screen Recording permission. Safe off the main thread.
+func windowUnderPointer() -> (pid: pid_t, wid: CGWindowID)? {
     guard let loc = CGEvent(source: nil)?.location,   // global top-left coords, like window bounds
           let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     else { return nil }
@@ -223,10 +223,29 @@ func appUnderPointer() -> String? {
               let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
               (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
               let b = w[kCGWindowBounds as String] as? NSDictionary,
-              let r = CGRect(dictionaryRepresentation: b), r.contains(loc) else { continue }
-        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+              let r = CGRect(dictionaryRepresentation: b), r.contains(loc),
+              let wid = w[kCGWindowNumber as String] as? CGWindowID else { continue }
+        return (pid, wid)
     }
     return nil
+}
+
+/// The app whose window is under the pointer (topmost ordinary window there), if any. Safe off the main thread.
+func appUnderPointer() -> String? {
+    windowUnderPointer().flatMap { NSRunningApplication(processIdentifier: $0.pid)?.bundleIdentifier }
+}
+
+/// What's under the pointer, for the peeks and the switcher (main thread). Asked on every pointer move by both,
+/// so a reading is reused for a moment.
+enum Hovered {
+    private static var cached: (at: CFTimeInterval, value: (pid: pid_t, wid: CGWindowID)?) = (0, nil)
+
+    static var window: (pid: pid_t, wid: CGWindowID)? {
+        let now = CACurrentMediaTime()
+        if now - cached.at > 0.05 { cached = (now, windowUnderPointer()) }
+        return cached.value
+    }
+
 }
 
 /// Of `pids`, the one owning the frontmost ordinary on-screen window, if any.

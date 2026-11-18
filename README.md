@@ -59,7 +59,8 @@ On first launch Drawer asks for **Accessibility** permission (System Settings �
 
 ## Usage
 
-Drawer lives in the menu bar. Open **Settings…** from its menu.
+Drawer lives in the menu bar. Open **Settings…** from its menu. For a step-by-step walkthrough with pictures, see the
+**[guide](docs/guide.md)**.
 
 ### Drawers
 
@@ -75,10 +76,17 @@ Then, with the main app in front:
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>D</kbd> | Bottom |
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>.</kbd> | Right |
 
-Change them under **General → Keyboard**, or give a single drawer its own shortcut.
+Change them under **General → Keyboard**, or give a single drawer its own shortcut. Or use the pointer:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/peeks-dark.png">
+    <img src="docs/peeks-light.png" alt="Point near the main window's edge, click the peek to open the drawer, click × to close it" width="100%">
+  </picture>
+</p>
 
 - **Hold to peek**: hold the shortcut to show the drawer, let go to hide it.
-- **Edge peeks**: point near the middle of the main window's left, bottom or right edge and a small arc peeks out with a chevron. Point at it and it grows into the drawer app's icon; click to open that drawer. While it's open, the same peek closes it; for an overlay drawer, which covers that edge, it's on the drawer's inner edge (top of a bottom drawer, right side of a left one) (Drawers → Peek at the edges).
+- **Edge peeks**: point near the middle of the main window's left, bottom or right edge and a small arc peeks out with a chevron. Point at it and it grows into the drawer app's icon; click to open that drawer. While it's open, the same peek shows an × and closes it; for an overlay drawer, which covers that edge, it's on the drawer's inner edge (top of a bottom drawer, right side of a left one). Peeks work on any main window under the pointer, even one that isn't in front (Drawers → Peek at the edges).
 - **Resize**: drag the drawer's inner edge (the one facing the main window). The new size is saved. **Double-click** that edge to go back to the previous size.
 - **Traffic lights** on an open drawer do drawer things. <kbd>⌥</kbd>-click for the usual behaviour.
   - 🔴 slides the drawer away. The app keeps its window and state.
@@ -105,7 +113,14 @@ While any app in the carousel is in front, or under the pointer (General → Car
 | Click an icon in the switcher | Switches straight to that app |
 | <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>S</kbd> | Shows or hides the switcher |
 
-The **switcher** is a small row of the carousel's app icons on the app showing now. By default a small arc peeks up when the pointer nears the middle of the window's bottom edge; touch it with the pointer and the switcher springs open. Move away and it drops back to the peek, which stays while the pointer is still in that area and tucks away a second after it leaves. It stays open while a click switches apps. It also opens on <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>S</kbd> (hold it to show the switcher until you let go). Under **Carousels** you can move it to the top, show it always or only on the shortcut, change the shortcut, or turn it off.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/switcher-dark.png">
+    <img src="docs/switcher-light.png" alt="Point near the bottom for the peek, touch it to open the switcher and pick an app; it also works on windows behind others" width="100%">
+  </picture>
+</p>
+
+The **switcher** is a small row of the carousel's app icons on the app showing now: the carousel window under the pointer, even one that isn't in front, else the one in front. By default a small arc peeks up when the pointer nears the middle of the window's bottom edge; touch it with the pointer and the switcher springs open. Move away and it drops back to the peek, which stays while the pointer is still in that area and tucks away a second after it leaves. It stays open while a click switches apps. It also opens on <kbd>fn</kbd> <kbd>⌃</kbd> <kbd>S</kbd> (hold it to show the switcher until you let go). Under **Carousels** you can move it to the top, show it always or only on the shortcut, change the shortcut, or turn it off.
 
 Move or resize whichever app is showing and the rest follow. The carousel's spot is wherever the current app's window is.
 

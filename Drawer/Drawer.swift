@@ -136,6 +136,16 @@ func windowNumber(_ w: AXUIElement) -> CGWindowID? {
     return _AXUIElementGetWindow(w, &wid) == .success && wid != 0 ? wid : nil
 }
 
+/// `app`'s Accessibility window with window number `wid`.
+func axWindow(_ app: NSRunningApplication, number wid: CGWindowID) -> AXUIElement? {
+    let el = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(el, 0.25)
+    var list: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &list) == .success,
+          let wins = list as? [AXUIElement] else { return nil }
+    return wins.first { windowNumber($0) == wid }
+}
+
 /// Whether `w` is on screen now (on a desktop showing, not hidden or minimised), even if covered.
 func isOnScreen(_ w: AXUIElement) -> Bool {
     guard let wid = windowNumber(w),

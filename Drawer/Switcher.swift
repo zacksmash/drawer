@@ -8,7 +8,8 @@ enum SwitcherState { case none, peek, full }
 /// A row of a carousel's app icons over the app showing now (Carousels → Switcher), like a little dock. Click one
 /// to switch straight to it. Shows on its shortcut, always, or (Pointer near its edge) as a small peek when the
 /// pointer nears that edge of the window, springing open once the pointer reaches the peek and back to the peek
-/// when it leaves. Only while a carousel app is in front; it stays open through a switch.
+/// when it leaves. On the carousel app under the pointer (focused or not), else the one in front; it stays open
+/// through a switch.
 final class CarouselSwitcher {
     private let panel = SwitcherPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                                       backing: .buffered, defer: true)
@@ -26,6 +27,8 @@ final class CarouselSwitcher {
     private var peekFrame: NSRect = .zero
     /// The pointer here brings up the peek: the middle of the window's edge, around where the switcher sits.
     private var zone: NSRect = .zero
+    private var shownPid: pid_t?       // the app it's on
+    private var lastHover: CGWindowID? // the window under the pointer last time: another one means look again
     private var shownOn: UUID?         // the carousel it's on, so switching to another app forgets `revealed`
     private var revealed = false       // by its shortcut, until pressed again or the app changes
     private var closeAfterSwap = false // opened by its shortcut and used: close once the switch is done
@@ -120,9 +123,8 @@ final class CarouselSwitcher {
         let cfg = Config.shared
         // Mid-switch: stay just as it is (open, on the same spot) until the new app is in.
         if carousels.isBusy, panel.isVisible { return }
-        guard cfg.switcher != .off, !carousels.isBusy,
-              let app = NSWorkspace.shared.frontmostApplication, let id = app.bundleIdentifier,
-              let c = cfg.carousel(containing: id), let w = visibleWindow(app), let f = axFrame(w)
+        guard cfg.switcher != .off, !carousels.isBusy, case let (app, w)? = pick(),
+              let id = app.bundleIdentifier, let c = cfg.carousel(containing: id), let f = axFrame(w)
         else {
             off()
             // A carousel app just switched to (Dock, ⌘-Tab, unhidden) can take a moment to put its window on
@@ -134,6 +136,7 @@ final class CarouselSwitcher {
             return
         }
         retries = 0
+        shownPid = app.processIdentifier
         if shownOn != c.id { shownOn = c.id; revealed = false; setHover(.none) }
         if closeAfterSwap { closeAfterSwap = false; revealed = false }
         let n = CGFloat(c.members.count)
@@ -154,18 +157,31 @@ final class CarouselSwitcher {
         }
     }
 
+    /// The carousel app to show it on: the one whose window is under the pointer, focused or not; else the one in front.
+    private func pick() -> (NSRunningApplication, AXUIElement)? {
+        func carouselWindow(_ app: NSRunningApplication?) -> AXUIElement? {
+            guard let app, !app.isHidden, Config.shared.carousel(containing: app.bundleIdentifier) != nil else { return nil }
+            return visibleWindow(app)
+        }
+        if let h = Hovered.window, let app = NSRunningApplication(processIdentifier: h.pid),
+           let w = carouselWindow(app), windowNumber(w) == h.wid { return (app, w) }
+        let front = NSWorkspace.shared.frontmostApplication
+        return carouselWindow(front).map { (front!, $0) }
+    }
+
     /// Nothing to show it on.
     private func off() {
         frame = nil
         flashing = false
         flashEnd?.cancel(); flashEnd = nil
         shownOn = nil
+        shownPid = nil
         revealed = false
         closeAfterSwap = false
         setHover(.none)
         unwatch()
         let cfg = Config.shared
-        trackPointer(cfg.switcher != .off && cfg.switcherShow == .hover)   // pointer moves also look again (see pointerMoved)
+        trackPointer(cfg.switcher != .off && cfg.switcherShow != .shortcut)   // pointer moves also look again (see pointerMoved)
         apply()
     }
 
@@ -191,7 +207,7 @@ final class CarouselSwitcher {
         let panelFrame = NSRect(x: (window.midX - w / 2).rounded(), y: top ? window.maxY - h : window.minY, width: w, height: h)
         if panel.frame != panelFrame { panel.setFrame(panelFrame, display: true) }
         model.top = top
-        trackPointer(cfg.switcherShow == .hover)
+        trackPointer(cfg.switcherShow != .shortcut)   // also follows the pointer onto other carousel windows
         if cfg.switcherShow == .hover { pointerMoved() }
         apply()
     }
@@ -259,6 +275,8 @@ final class CarouselSwitcher {
     /// Moves come from two places: everywhere else (a global monitor), and over the panel itself (its tracking
     /// area), since Drawer gets no global moves over its own window.
     private func pointerMoved() {
+        let under = Hovered.window
+        if under?.wid != lastHover, !carousels.isBusy { lastHover = under?.wid; refresh() }   // maybe another carousel app
         guard let frame else {
             // Nothing showing: if a carousel app is in front anyway, it was missed. Look again, now and then.
             let now = CACurrentMediaTime()
@@ -275,7 +293,7 @@ final class CarouselSwitcher {
         if now - lastCheck > 1 { lastCheck = now; refresh() }
         guard Config.shared.switcherShow == .hover else { return }
         let p = NSEvent.mouseLocation
-        let near = zone.contains(p)
+        let near = zone.contains(p) && under?.pid == shownPid   // not where another window covers that edge
         let onPeek = peekFrame.contains(p)   // it opens only once the pointer touches it
         let onOpen = frame.union(peekFrame).insetBy(dx: -8, dy: -8).contains(p)
         let was = hover
@@ -360,7 +378,7 @@ final class SwitcherModel: ObservableObject {
 
 /// The peek and the open switcher, in one panel: the peek rises from the window's edge, the switcher springs
 /// open out of it.
-private struct SwitcherView: View {
+struct SwitcherView: View {
     @ObservedObject var model: SwitcherModel
 
     private static let bounce = Animation.spring(response: 0.34, dampingFraction: 0.55)

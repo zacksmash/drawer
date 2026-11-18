@@ -44,8 +44,10 @@ final class DrawerPeeks {
     }
 
     private var peeks: [Edge: Peek] = [:]
-    /// The main app in front (or the main app of the open drawer in front): its drawers by edge and its window.
-    private var target: (pairs: [Edge: Pair], window: NSRect)?
+    /// The main app under the pointer or in front (or the main app of the open drawer there): its drawers by edge
+    /// and its window.
+    private var target: (mainID: String, pairs: [Edge: Pair], window: NSRect)?
+    private var lastHover: CGWindowID?   // the window under the pointer last time: another one means look again
     private var watched: (window: AXUIElement, app: AXUIElement, observer: AXObserver)?
     private var lastCheck: CFTimeInterval = 0
     private var pointerMonitor: Any?
@@ -78,21 +80,31 @@ final class DrawerPeeks {
 
     private func update() {
         let cfg = Config.shared
-        guard cfg.drawerPeeks, AXIsProcessTrusted(),
-              let mainID = drawer.mainApp(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier),
-              let main = running(mainID), !main.isHidden,
-              let w = visibleWindow(main), let f = axFrame(w)
+        guard cfg.drawerPeeks, AXIsProcessTrusted(), case let (main, w)? = pick(),
+              let mainID = main.bundleIdentifier, let f = axFrame(w)
         else { clear(); return }
         var pairs: [Edge: Pair] = [:]
         for p in cfg.pairs where p.mainID == mainID && pairs[p.edge] == nil { pairs[p.edge] = p }   // the first on each edge
         if cfg.switcher == .bottom, cfg.carousel(containing: mainID) != nil { pairs[.bottom] = nil }   // the switcher's edge
-        target = (pairs, cocoa(f))
+        target = (mainID, pairs, cocoa(f))
         watch(main, w)
         trackPointer(true)
         pointerMoved()
     }
 
-    /// Nothing in front with drawers to peek at.
+    /// The main app to peek at: the one whose window (or one of whose open drawers) is under the pointer, focused or
+    /// not; else the one in front.
+    private func pick() -> (NSRunningApplication, AXUIElement)? {
+        func main(for id: String?) -> (NSRunningApplication, AXUIElement)? {
+            guard let id = drawer.mainApp(for: id), let m = running(id), !m.isHidden, let w = visibleWindow(m) else { return nil }
+            return (m, w)
+        }
+        if let h = Hovered.window, let id = NSRunningApplication(processIdentifier: h.pid)?.bundleIdentifier,
+           let m = main(for: id), m.0.bundleIdentifier != id || windowNumber(m.1) == h.wid { return m }
+        return main(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    }
+
+    /// Nothing under the pointer or in front with drawers to peek at.
     private func clear() {
         target = nil
         for pk in peeks.values { hide(pk) }
@@ -169,7 +181,9 @@ final class DrawerPeeks {
 
     /// Moves come from everywhere else (a global monitor) and from over a peek itself (its tracking area).
     private func pointerMoved() {
-        guard target != nil else {
+        let hover = Hovered.window
+        if hover?.wid != lastHover { lastHover = hover?.wid; refresh() }   // onto another window: maybe another main app
+        guard let target else {
             // Nothing set up: if a main app with drawers is in front anyway, it was missed. Look again, now and then.
             let now = CACurrentMediaTime()
             if now - lastLook > 0.3, drawer.mainApp(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) != nil {
@@ -183,6 +197,9 @@ final class DrawerPeeks {
         let now = CACurrentMediaTime()
         if now - lastCheck > 1 { lastCheck = now; refresh() }
         let p = NSEvent.mouseLocation
+        // Only over its own windows: not where another window covers that edge.
+        let over = hover.flatMap { NSRunningApplication(processIdentifier: $0.pid)?.bundleIdentifier }
+            .flatMap { drawer.mainApp(for: $0) } == target.mainID
         for edge in [Edge.left, .bottom, .right] {
             let pk = peek(edge)
             guard let s = spot(edge) else { pk.spot = nil; hide(pk); continue }
@@ -193,9 +210,10 @@ final class DrawerPeeks {
             let points = s.closes ? edge.outward : edge.inward
             if pk.model.points != points { pk.model.points = points }   // only on change: each set redraws it
             if pk.model.icon != s.pair.drawerID { pk.model.icon = s.pair.drawerID }
+            if pk.model.closes != s.closes { pk.model.closes = s.closes }
             let onPeek = s.frame.contains(p), onLarge = pk.large && s.large.insetBy(dx: -8, dy: -8).contains(p)
             if pk.shown, pk.large != (onPeek || onLarge) { pk.large = onPeek || onLarge; pk.model.large = pk.large; publishHits() }
-            if s.zone.contains(p) || onPeek || onLarge {
+            if (over && s.zone.contains(p)) || onPeek || onLarge {
                 if !changed || !pk.panel.isVisible { show(pk) }
             } else if pk.shown {
                 hideSoon(pk)
@@ -310,14 +328,15 @@ final class PeekModel: ObservableObject {
     @Published var edge: Edge = .bottom
     @Published var points: Edge.Direction = .up
     @Published var icon = ""
+    @Published var closes = false   // on an open drawer: an × instead of the chevron
     @Published var visible = false
     @Published var large = false   // grown: the pointer is on it
     var click: () -> Void = {}
 }
 
-/// A drawer's peek: a low arc on the edge with a chevron the way the drawer will go, springing out of the edge;
+/// A drawer's peek: a low arc on the edge with a chevron the way the drawer will go (an × to close it), springing out of the edge;
 /// with the pointer on it, it grows into the drawer app's icon and that chevron, like the carousel switcher.
-private struct DrawerPeekView: View {
+struct DrawerPeekView: View {
     @ObservedObject var model: PeekModel
 
     private static let bounce = Animation.spring(response: 0.34, dampingFraction: 0.55)
@@ -354,8 +373,8 @@ private struct DrawerPeekView: View {
             .opacity(small ? 1 : 0)
             .allowsHitTesting(small)
             Button(action: model.click) {
-                // The drawer app's icon in its own tile, and the chevron outside it, pointing the way the drawer
-                // will go. White with a dark halo, so it reads over anything.
+                // The drawer app's icon in its own tile, and the chevron (or the ×) outside it, on the side away
+                // from the edge. White with a dark halo, so it reads over anything.
                 let tile = AppIcon(id: model.icon, size: 22)
                     .frame(width: Self.tile, height: Self.tile)
                     .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9))
@@ -365,13 +384,11 @@ private struct DrawerPeekView: View {
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.55), radius: 1)
                     .shadow(color: .black.opacity(0.35), radius: 3)
-                // On the side it points: away from the edge to open, toward it (the drawer) to close.
                 Group {
-                    switch model.points {
-                    case .up: VStack(spacing: 3) { arrow; tile }
-                    case .down: VStack(spacing: 3) { tile; arrow }
-                    case .left: HStack(spacing: 3) { arrow; tile }
-                    case .right: HStack(spacing: 3) { tile; arrow }
+                    switch edge {
+                    case .bottom: VStack(spacing: 3) { arrow; tile }
+                    case .left: HStack(spacing: 3) { tile; arrow }
+                    case .right: HStack(spacing: 3) { arrow; tile }
                     }
                 }
                 .frame(width: large.width, height: large.height, alignment: align)
@@ -389,6 +406,7 @@ private struct DrawerPeekView: View {
     }
 
     private func chevron(size: CGFloat) -> some View {
+        if model.closes { return Image(systemName: "xmark").font(.system(size: size - 1, weight: .heavy)) }
         let name = switch model.points {
         case .left: "chevron.left"; case .right: "chevron.right"; case .up: "chevron.up"; case .down: "chevron.down"
         }

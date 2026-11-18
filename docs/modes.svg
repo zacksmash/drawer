@@ -51,12 +51,18 @@
       <rect x="0" y="0" width="340" height="200" rx="14" fill="url(#blue)" filter="url(#s)"/>
       <rect x="22" y="24" width="160" height="12" rx="6" fill="#fff" opacity="0.55"/>
       <rect x="22" y="48" width="120" height="12" rx="6" fill="#fff" opacity="0.4"/>
-      <g stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
-        <path d="M120 140 l-16 16 l16 16"/>
-        <path d="M220 140 l16 16 l-16 16"/>
+      <g stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.9">
+        <path d="M78 104 l-14 14 l14 14"/>
+        <path d="M262 104 l14 14 l-14 14"/>
       </g>
+      <!-- switcher dock on the bottom edge -->
+      <rect x="98" y="150" width="144" height="42" rx="14" fill="#16171f" opacity="0.4"/>
+      <rect x="149" y="153" width="42" height="36" rx="10" fill="#fff" opacity="0.3"/>
+      <rect x="110" y="157" width="28" height="28" rx="7" fill="url(#orange)"/>
+      <rect x="156" y="157" width="28" height="28" rx="7" fill="url(#blue)"/>
+      <rect x="202" y="157" width="28" height="28" rx="7" fill="url(#violet)"/>
       <text x="170" y="270" font-size="24" font-weight="700" fill="#fff">Carousel</text>
-      <text x="170" y="298" font-size="17" fill="#9a9bab">apps take turns in one spot</text>
+      <text x="170" y="298" font-size="17" fill="#9a9bab">apps take turns, a dock to switch</text>
     </g>
   </g>
 </svg>

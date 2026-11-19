@@ -34,7 +34,7 @@ Pick a **main app** (your editor, browser, whatever you live in) and give it **d
 > **Drawer isn't signed with a paid Apple Developer account**, so it isn't notarized by Apple. That's a $99/year membership, and Drawer is a free side project.
 >
 > - **Building from source** (below) is the easiest way: an app you build yourself isn't flagged by Gatekeeper.
-> - **If you download a pre-built copy** from [Releases](https://github.com/zacksmash/drawer/releases/latest), macOS will refuse to open it the first time. Go to **System Settings → Privacy & Security** and click **Open Anyway**, or clear the download flag once:
+> - **If you download a pre-built copy** (DMG or zip) from [Releases](https://github.com/zacksmash/drawer/releases/latest), macOS will refuse to open it the first time. Go to **System Settings → Privacy & Security** and click **Open Anyway**, or clear the download flag once:
 >   ```bash
 >   xattr -dr com.apple.quarantine /Applications/Drawer.app
 >   ```
